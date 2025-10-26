@@ -1,20 +1,31 @@
 Directions:
 
-### Use the Lat Lon from the GPX file (the other file may be wrong)
+1. ## Create combined  csv with bonus, lat, lon and points
 
-This will create a csv with the bonus, lat, lon and points
+    Use the Lat Lon from the GPX file (the other file may be wrong)
 
-`python extractDatafromGPX.py 2023\ SNAFU\ Bonus_Code-Lat-Long-Points.csv SNAFU\ 2023\ -\ FINAL.gpx`
+    `
+    python extractDatafromGPX.py 2023\ SNAFU\ Bonus_Code-Lat-Long-Points.csv SNAFU\ 2023\ -\ FINAL.gpx
+    `
 
-### Create a list of combinations
-This will create a csv of all combinations. Output is, `bonus1, bonus2, latlon2, latlon2, points at destination`
+2. ## Create a list of combinations
 
-`python extractDatafromGPX.py 2023\ SNAFU\ Bonus_Code-Lat-Long-Points.csv SNAFU\ 2023\ -\ FINAL.gpx`
+    Gets the bonus code from the provided csv file.
 
-### Enqueue the combos
+     Output is, `bonus1, bonus2, latlon2, latlon2, points at destination`
 
-This helps save $$$...puts the combinations on a local, perisistent. Now we can restart the process if it is interrupted... and not have to re-run against Google's API.
+    `
+    python generateCombinationsFile.py  bonus-lat-long-ponts.csv  combos.csv
+    `
 
-`python enqueueCSV.py combos.csv`
+3. ## Add the combos to a persistent queue
+
+    This helps save $$$...puts the combinations on a local, perisistent. Now we can restart the process if it is interrupted... and not have to re-run against Google's API.
+
+    `python enqueueCSV.py combos.csv`
+
+4. ## Read from queue and query Google API, storing results in csv
+
+
 
 
