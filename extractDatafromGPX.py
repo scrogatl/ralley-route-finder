@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-import os, sys,traceback
+import csv, os, sys,traceback
 import xml.etree.ElementTree as ET
 import pandas as pd
 
@@ -45,23 +45,25 @@ TYPE_TAG = GPX_NAMESPACE + "type"
 tree = ET.parse(sys.argv[2])
 root = tree.getroot()
 
-# Iterate through child elements
-for bonus in root.findall(WPT_TAG):
-    lat = lon = code = points = ''
-    try:
-        lat = bonus.get('lat')
-        lon = bonus.get('lon')
-        code = bonus.find(NAME_TAG).text
-        points = csvDataFrame[csvDataFrame[0].str.contains(code)].iat[0,3]
-    except Exception as e:
-        # traceback.print_exc()
-        points = "ERROR"
-        code = code + " ERROR"
+with open('bonus-lat-long-ponts.csv', 'w') as f:
+    # Iterate through child elements
+    for bonus in root.findall(WPT_TAG):
+        lat = lon = code = points = ''
+        try:
+            lat = bonus.get('lat')
+            lon = bonus.get('lon')
+            code = bonus.find(NAME_TAG).text
+            points = csvDataFrame[csvDataFrame[0].str.contains(code)].iat[0,3]
+        except Exception as e:
+            # traceback.print_exc()
+            points = "ERROR"
+            code = code + " ERROR"
 
 
-    # print(f"\nBonus: {code}")
-    # print(f"Lat: {lat}")
-    # print(f"Lon: {lon}")
-    # print(f"Points: {points}")
-    print(f"{code}, {lat}, {lon},{points}")
-    # print("-----")
+        # print(f"\nBonus: {code}")
+        # print(f"Lat: {lat}")
+        # print(f"Lon: {lon}")
+        # print(f"Points: {points}")
+        print(f"{code}, {lat}, {lon},{points}")
+        # print("-----")
+        f.write(f"{code}, {lat}, {lon},{points}\n")
