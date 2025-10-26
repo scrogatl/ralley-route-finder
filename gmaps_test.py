@@ -1,6 +1,6 @@
 import googlemaps
 from datetime import datetime
-import json
+import json,sys
 
 gmaps = googlemaps.Client(key='REDACTED_GOOGLE_KEY')
 
@@ -13,7 +13,7 @@ gmaps = googlemaps.Client(key='REDACTED_GOOGLE_KEY')
 # Request directions via public transit
 now = datetime.now()
 directions_result = gmaps.directions("32.610320001840591, -85.48080001026392",
-                                     "32.610320001840591, -85.48080001026392",
+                                     "33.666510209441185, -84.018228147178888",
                                      departure_time=now)
 
 # directions_result = gmaps.directions("Roswell, Georgia",
@@ -33,7 +33,7 @@ print(type(directions_result[0]))
 #    print(type(item))
 #print(directions_result[0]["legs"][0].keys())
 
-
+# sys.exit()
 
 
 # Validate an address with address validation
@@ -67,8 +67,8 @@ for i, leg in enumerate(route_legs):
     print(f"\n--- Leg {i+1} Summary ---")
     
     # Extract total distance and duration for the leg
-    distance = leg.get("distance", {}).get("text", "N/A")
-    duration = leg.get("duration", {}).get("text", "N/A")
+    distance = leg.get("distance", {}).get("value", "N/A")
+    duration = leg.get("duration", {}).get("value", "N/A")
     traffic_duration = leg.get("duration_in_traffic", {}).get("text", "N/A")
     
     # Extract start and end addresses

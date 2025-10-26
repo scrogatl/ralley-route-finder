@@ -59,11 +59,5 @@ with open('bonus-lat-long-ponts.csv', 'w') as f:
             points = "ERROR"
             code = code + " ERROR"
 
-
-        # print(f"\nBonus: {code}")
-        # print(f"Lat: {lat}")
-        # print(f"Lon: {lon}")
-        # print(f"Points: {points}")
         print(f"{code}, {lat}, {lon},{points}")
-        # print("-----")
         f.write(f"{code}, {lat}, {lon},{points}\n")
