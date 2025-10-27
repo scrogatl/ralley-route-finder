@@ -10,30 +10,17 @@ csv_file_path =  sys.argv[1]
 
 # Read the CSV file into a pandas DataFrame
 csvDataFrame = pd.read_csv(csv_file_path,  header=None)
-# print(df)
-# print(csvDataFrame[0][0])
-# codes = csvDataFrame[0]
-# print(codes)
-# df = csvDataFrame[csvDataFrame[0].str.contains('ASHF')]
-# print(df)
 points = csvDataFrame[csvDataFrame[0].str.contains('RAVE')].iat[0,3]
 print(f"Points: {points}")
-# sys.exit()
+
+# This line for testing...
+sys.exit()
 
 
-# print(f"Root element tag: {root.tag}")
-# print(f"Root element attrib: {root.attrib}")
-# sys.exit()
-# x = 1
-# for element in root.iter():
-#     print(element.tag, element.attrib)
-#     # print(element.find('wpt'))
-#     print("===============")
-#     x = x + 1
-#     if(x > 50 ): 
-#         sys.exit('0')
-
-
+#
+# Got this from gemeni.. need to add the namespace 
+#   for *.get() to work 
+#
 # Define the primary GPX namespace URI
 GPX_NAMESPACE = "{http://www.topografix.com/GPX/1/1}"
     
@@ -42,9 +29,12 @@ WPT_TAG = GPX_NAMESPACE + "wpt"
 NAME_TAG = GPX_NAMESPACE + "name"
 TYPE_TAG = GPX_NAMESPACE + "type"
 
+# Load csv with bonus codes and points
 tree = ET.parse(sys.argv[2])
 root = tree.getroot()
 
+# Create merged file with lat-lon from GPX and bonus 
+#   details from CSV file
 with open('bonus-lat-long-ponts.csv', 'w') as f:
     # Iterate through child elements
     for bonus in root.findall(WPT_TAG):
