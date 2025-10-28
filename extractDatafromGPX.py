@@ -9,6 +9,7 @@ import pandas as pd
 csv_file_path =  sys.argv[1]
 
 # Read the CSV file into a pandas DataFrame
+# file has the points for each bonus, not in the GPX file
 csvDataFrame = pd.read_csv(csv_file_path,  header=None)
 points = csvDataFrame[csvDataFrame[0].str.contains('RAVE')].iat[0,3]
 print(f"Points: {points}")
@@ -29,7 +30,7 @@ WPT_TAG = GPX_NAMESPACE + "wpt"
 NAME_TAG = GPX_NAMESPACE + "name"
 TYPE_TAG = GPX_NAMESPACE + "type"
 
-# Load csv with bonus codes and points
+# Load GPX file with working lat-lons
 tree = ET.parse(sys.argv[2])
 root = tree.getroot()
 
