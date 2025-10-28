@@ -15,7 +15,7 @@ Directions:
      Output is, `bonus1, bonus2, latlon2, latlon2, points at destination`
 
     `
-    python generateCombinationsFile.py  bonus-lat-long-ponts.csv  combos.csv
+    python generateCombinationsFile.py  bonus-lat-lon-points.csv  combos.csv
     `
 
 3. ## Add the combos to a persistent queue
