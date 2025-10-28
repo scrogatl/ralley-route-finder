@@ -22,10 +22,22 @@ Directions:
 
     This helps save $$$...puts the combinations on a local, perisistent. Now we can restart the process if it is interrupted... and not have to re-run against Google's API.
 
-    `python enqueueCSV.py combos.csv`
+    `
+    python enqueueCSV.py combos.csv
+    `
 
 4. ## Read from queue and query Google API, storing results in csv
 
+    **NOTE: This costs about $300 to run!!!!**
 
+    `
+    python getDirections.py  segments.csv
+    `
+
+5. ## Search all segments for best route
+
+    `
+    python searchSegments.py segments.csv
+    `
 
 
