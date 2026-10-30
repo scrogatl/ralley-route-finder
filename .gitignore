@@ -5,3 +5,4 @@ bonus-lat-long-ponts.csv
 .~lock.*
 __pycache__/
 *.log
+route*.gpx

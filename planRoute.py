@@ -1,0 +1,569 @@
+#!/usr/bin/env python
+"""
+Plan a high-scoring rally route from bonus-lat-lon-points.csv without
+calling the Google API.
+
+Distances are straight-line (great circle) miles between bonuses, so they
+are rough: real roads are longer. Use --road-factor to pad them (1.3 is a
+common rule of thumb). The route starts and ends at Rally HQ and must fit
+in the time budget, including 5 minutes (--stop-minutes) at each bonus to
+take its picture, a 10-minute gas stop every 175 miles (--gas-miles,
+--gas-minutes), and slower driving through Atlanta (--slow-zone).
+
+Picking the best set of stops is the "orienteering problem", which has no
+fast exact solution, so this uses a heuristic: build a route by greedily
+inserting the best points-per-hour bonus, then systematically try dropping
+each run of stops, re-insert, and keep the result whenever it scores higher.
+That is repeated starting from every bonus with several weightings, and the
+best route is polished by trying to swap each stop for an unvisited bonus.
+There is no randomness, so the same inputs always give the same route. It is
+thorough rather than fast: expect several minutes.
+
+    python planRoute.py bonus-lat-lon-points.csv --hours 10 --speed 45
+"""
+import argparse, collections, csv, math, multiprocessing, os, sys
+import xml.etree.ElementTree as ET
+
+EARTH_RADIUS_MILES = 3958.8
+GPX_NS = "http://www.topografix.com/GPX/1/1"
+
+# Atlanta traffic: centered in the I-285 loop, radius covers I-285 (about
+# 10 miles out) plus about 5 more; speed is a guess, change it with --slow-zone
+ATLANTA_SLOW_ZONE = dict(lat=33.78, lon=-84.39, radius=15, mph=25)
+
+# Each starting route trades points against extra time differently; the
+# search improves every one and keeps the best
+START_WEIGHTS = (0.5, 0.75, 1.0, 1.5, 2.0)
+
+
+def load_bonuses(csv_file_path):
+    """Return (hq, bonuses); each is a dict with code, lat, lon, points, state."""
+    hq = None
+    bonuses = []
+    with open(csv_file_path) as f:
+        for row in csv.reader(f):
+            if not row:
+                continue
+            code, lat, lon, points, state = [field.strip() for field in row[:5]]
+            if 'Rally' in code:
+                hq = dict(code=code, lat=float(lat), lon=float(lon), points=0, state=state)
+                continue
+            try:
+                points = int(points)
+            except ValueError:
+                print(f"WARNING: skipping '{code}', points is '{points}'", file=sys.stderr)
+                continue
+            bonuses.append(dict(code=code, lat=float(lat), lon=float(lon), points=points, state=state))
+    if hq is None:
+        sys.exit(f"ERROR: no 'Rally HQ' row found in {csv_file_path}")
+    return hq, bonuses
+
+
+def haversine_miles(a, b):
+    lat1, lon1, lat2, lon2 = map(math.radians, (a['lat'], a['lon'], b['lat'], b['lon']))
+    h = math.sin((lat2 - lat1) / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin((lon2 - lon1) / 2) ** 2
+    return 2 * EARTH_RADIUS_MILES * math.asin(math.sqrt(h))
+
+
+def parse_slow_zone(text):
+    """'LAT,LON,RADIUS_MILES,MPH' -> dict, for argparse."""
+    try:
+        lat, lon, radius, mph = (float(v) for v in text.split(','))
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected LAT,LON,RADIUS_MILES,MPH, got '{text}'")
+    return dict(lat=lat, lon=lon, radius=radius, mph=mph)
+
+
+def add_slow_zone_args(parser):
+    parser.add_argument('--slow-zone', type=parse_slow_zone, action='append', metavar='LAT,LON,RADIUS_MILES,MPH',
+                        help='the part of any leg inside this circle is driven at MPH; repeat for more zones '
+                             '(default: Atlanta, I-285 plus about 5 miles: '
+                             f"{','.join(f'{v:g}' for v in ATLANTA_SLOW_ZONE.values())})")
+    parser.add_argument('--no-slow-zone', action='store_true', help='turn off the default Atlanta slow zone')
+
+
+def add_gas_args(parser):
+    parser.add_argument('--gas-miles', type=float, default=175,
+                        help='stop for gas every this many miles; 0 for no gas stops (default 175)')
+    parser.add_argument('--gas-minutes', type=float, default=10, help='time for each gas stop (default 10)')
+
+
+def describe_gas(args):
+    if not args.gas_miles:
+        return "no gas stops"
+    return f"{args.gas_minutes:g} min gas stop every {args.gas_miles:g} mi"
+
+
+def slow_zones_from_args(args):
+    if args.no_slow_zone:
+        return []
+    return args.slow_zone or [ATLANTA_SLOW_ZONE]
+
+
+def describe_slow_zones(zones):
+    if not zones:
+        return "no slow zones"
+    return ", ".join(f"{z['radius']:g} mi slow zone at {z['mph']:g} MPH around {z['lat']:g},{z['lon']:g}"
+                     for z in zones)
+
+
+def fraction_inside(a, b, zone):
+    """Fraction of the straight line from a to b that lies inside the zone's
+    circle. Uses a flat map around the zone's center, which is accurate
+    enough at metro-area sizes."""
+    miles_per_lon = 69.17 * math.cos(math.radians(zone['lat']))
+    ax, ay = (a['lon'] - zone['lon']) * miles_per_lon, (a['lat'] - zone['lat']) * 69.0
+    bx, by = (b['lon'] - zone['lon']) * miles_per_lon, (b['lat'] - zone['lat']) * 69.0
+    dx, dy = bx - ax, by - ay
+    # Points along the line are a + t(b - a) for t from 0 to 1; solve for
+    # where that crosses the circle, and keep the part between 0 and 1
+    qa, qb, qc = dx * dx + dy * dy, 2 * (ax * dx + ay * dy), ax * ax + ay * ay - zone['radius'] ** 2
+    if qa == 0:
+        return 1.0 if qc <= 0 else 0.0
+    disc = qb * qb - 4 * qa * qc
+    if disc <= 0:
+        return 0.0
+    t1, t2 = (-qb - math.sqrt(disc)) / (2 * qa), (-qb + math.sqrt(disc)) / (2 * qa)
+    return max(0.0, min(1.0, t2) - max(0.0, t1))
+
+
+class Planner:
+    """Stops are indexes into self.places; index 0 is Rally HQ."""
+
+    def __init__(self, hq, bonuses, hours, speed, stop_minutes, road_factor, front_load, slow_zones=(),
+                 gas_miles=0, gas_minutes=0):
+        self.places = [hq] + bonuses
+        self.max_hours = hours
+        self.stop_hours = stop_minutes / 60
+        self.front_load = front_load
+        self.gas_miles = gas_miles
+        self.gas_hours = gas_minutes / 60
+        n = len(self.places)
+        # Estimated road miles, and travel time in hours, between every pair of places
+        self.miles = [[haversine_miles(self.places[i], self.places[j]) * road_factor
+                       for j in range(n)] for i in range(n)]
+        self.hours = [[self.leg_hours(self.places[i], self.places[j], self.miles[i][j], speed, slow_zones)
+                       for j in range(n)] for i in range(n)]
+        # Cached for insert_greedily's inner loop: hours_to[j][i] is hours[i][j]
+        self.hours_to = [list(column) for column in zip(*self.hours)]
+        self.miles_to = [list(column) for column in zip(*self.miles)]
+        self.points = [place['points'] for place in self.places]
+
+    @staticmethod
+    def leg_hours(a, b, miles, speed, slow_zones):
+        # The share of the leg inside each slow zone goes at that zone's speed
+        # (zones shouldn't overlap, or the overlap is counted twice)
+        per_mile = 1 / speed
+        for zone in slow_zones:
+            per_mile += fraction_inside(a, b, zone) * (1 / zone['mph'] - 1 / speed)
+        return miles * per_mile
+
+    def gas_stops(self, miles):
+        """Gas stops needed to drive this many miles: one each time the
+        odometer passes another gas_miles."""
+        return int(miles // self.gas_miles) if self.gas_miles else 0
+
+    def route_miles(self, route):
+        miles = self.miles
+        total = 0
+        previous = 0
+        for b in route:
+            total += miles[previous][b]
+            previous = b
+        return total + miles[previous][0]
+
+    def route_hours(self, route):
+        # Called millions of times, so one loop over local names
+        hours, miles = self.hours, self.miles
+        drive = distance = 0
+        previous = 0
+        for b in route:
+            drive += hours[previous][b]
+            distance += miles[previous][b]
+            previous = b
+        drive += hours[previous][0]
+        distance += miles[previous][0]
+        return drive + len(route) * self.stop_hours + self.gas_stops(distance) * self.gas_hours
+
+    def route_points(self, route):
+        points = self.points
+        return sum(points[i] for i in route)
+
+    def early_points(self, route):
+        """Each bonus's points scaled by the fraction of the day left when you
+        arrive, so the same stops score higher when big ones come first."""
+        hours, miles, points = self.hours, self.miles, self.points
+        gas_miles, gas_hours, stop_hours, max_hours = self.gas_miles, self.gas_hours, self.stop_hours, self.max_hours
+        score = elapsed = distance = 0
+        previous = 0
+        for b in route:
+            leg_miles = miles[previous][b]
+            # Plus any gas stops on the way
+            gas = int((distance + leg_miles) // gas_miles) - int(distance // gas_miles) if gas_miles else 0
+            elapsed += hours[previous][b] + gas_hours * gas
+            distance += leg_miles
+            score += points[b] * (1 - elapsed / max_hours)
+            elapsed += stop_hours
+            previous = b
+        return score
+
+    def route_value(self, route):
+        return self.route_points(route) + self.front_load * self.early_points(route)
+
+    def orient(self, route):
+        """Driving a loop backwards takes the same time, so pick the direction
+        that collects points sooner."""
+        backwards = route[::-1]
+        return backwards if self.early_points(backwards) > self.early_points(route) else route
+
+    def insert_greedily(self, route, weight=1.0):
+        """Keep adding the bonus with the best points per extra hour until nothing fits.
+
+        weight sets how much extra time counts against a bonus: above 1 favors
+        nearby bonuses, below 1 favors high-point ones farther away.
+        """
+        route = list(route)
+        used = self.route_hours(route)
+        used_miles = self.route_miles(route)
+        unvisited = set(range(1, len(self.places))) - set(route)
+        # This loop is where nearly all the run time goes, so it works from
+        # local copies and does each piece of arithmetic once per pass
+        hours, miles, hours_to, miles_to = self.hours, self.miles, self.hours_to, self.miles_to
+        all_points, stop_hours, max_hours = self.points, self.stop_hours, self.max_hours
+        gas_miles, gas_hours, front_load = self.gas_miles, self.gas_hours, self.front_load
+        while True:
+            best = None
+            stops = [0] + route + [0]
+            if front_load:
+                # When you leave each stop, and the points still to collect after it
+                depart = [0.0]
+                for k in range(1, len(stops) - 1):
+                    depart.append(depart[-1] + hours[stops[k - 1]][stops[k]] + stop_hours)
+                later_points = [sum(all_points[s] for s in stops[k + 1:]) for k in range(len(stops) - 1)]
+            gas_now = int(used_miles // gas_miles) if gas_miles else 0
+            for k in range(len(stops) - 1):
+                a, c = stops[k], stops[k + 1]
+                hours_from, miles_from, hours_into, miles_into = hours[a], miles[a], hours_to[c], miles_to[c]
+                hours_ac, miles_ac = hours[a][c], miles[a][c]
+                for b in unvisited:
+                    extra_miles = miles_from[b] + miles_into[b] - miles_ac
+                    extra = hours_from[b] + hours_into[b] - hours_ac + stop_hours
+                    if gas_miles:
+                        extra += gas_hours * (int((used_miles + extra_miles) // gas_miles) - gas_now)
+                    if used + extra > max_hours:
+                        continue
+                    points = all_points[b]
+                    if front_load:
+                        # Credit for reaching b early, minus the delay it causes every later stop
+                        arrive = depart[k] + hours_from[b]
+                        gain = (points * (1 + front_load * (1 - arrive / max_hours))
+                                - front_load * extra * later_points[k] / max_hours)
+                    else:
+                        gain = points
+                    if gain <= 0:
+                        continue
+                    ratio = gain / max(extra, 1e-6) ** weight
+                    # Ties go to the lowest index so the result never depends on set order
+                    if best is None or ratio > best[0] or (ratio == best[0] and (-b, -k) > (best[1], best[2])):
+                        best = (ratio, -b, -k, b, k, extra, extra_miles)
+            if best is None:
+                return route
+            b, pos, extra, extra_miles = best[3:]
+            route.insert(pos, b)
+            used += extra
+            used_miles += extra_miles
+            unvisited.discard(b)
+
+    def two_opt(self, route):
+        """Uncross the route to cut driving time without changing which stops are in it."""
+        if self.front_load:
+            return self.two_opt_front_loaded(route)
+        improved = True
+        miles = self.route_miles(route)
+        while improved:
+            improved = False
+            stops = [0] + route + [0]
+            for i in range(1, len(stops) - 2):
+                for j in range(i + 1, len(stops) - 1):
+                    a, b, c, d = stops[i - 1], stops[i], stops[j], stops[j + 1]
+                    # A slow zone can make a quicker leg longer in miles, so
+                    # count any gas stop that adds
+                    change_miles = self.miles[a][c] + self.miles[b][d] - self.miles[a][b] - self.miles[c][d]
+                    change = (self.hours[a][c] + self.hours[b][d] - self.hours[a][b] - self.hours[c][d]
+                              + self.gas_hours * (self.gas_stops(miles + change_miles) - self.gas_stops(miles)))
+                    if change < -1e-9:
+                        stops[i:j + 1] = reversed(stops[i:j + 1])
+                        miles += change_miles
+                        improved = True
+            route = stops[1:-1]
+        return route
+
+    def two_opt_front_loaded(self, route):
+        """Like two_opt, but keep a reversal that raises the value even if it
+        drives farther, as long as the route still fits in the time budget."""
+        improved = True
+        while improved:
+            improved = False
+            value, hours = self.route_value(route), self.route_hours(route)
+            for i in range(len(route)):
+                for j in range(i + 1, len(route)):
+                    candidate = route[:i] + route[i:j + 1][::-1] + route[j + 1:]
+                    c_value, c_hours = self.route_value(candidate), self.route_hours(candidate)
+                    if c_hours <= self.max_hours and (c_value > value + 1e-9 or
+                                                      (c_value > value - 1e-9 and c_hours < hours - 1e-9)):
+                        route = candidate
+                        improved = True
+                        break
+                if improved:
+                    break
+        return route
+
+    def improve(self, route, weight=1.0):
+        return self.orient(self.insert_greedily(self.two_opt(route), weight))
+
+    def front_load_order(self, route):
+        """Reorder the stops (reverse any stretch, or move one stop) to collect
+        points sooner, as long as the route still fits in the time budget."""
+        improved = True
+        while improved:
+            improved = False
+            score = self.early_points(route)
+            n = len(route)
+            moves = [route[:i] + route[i:j + 1][::-1] + route[j + 1:] for i in range(n) for j in range(i + 1, n)]
+            # Take stop i out, then put it back at position j of what's left
+            for i in range(n):
+                rest = route[:i] + route[i + 1:]
+                moves += [rest[:j] + [route[i]] + rest[j:] for j in range(n) if j != i]
+            for candidate in moves:
+                if self.early_points(candidate) > score + 1e-9 and self.route_hours(candidate) <= self.max_hours:
+                    route = candidate
+                    improved = True
+                    break
+        return route
+
+    def better(self, a, b):
+        """True if route a beats route b: higher value, then points collected
+        sooner, then less time."""
+        va, vb = self.route_value(a), self.route_value(b)
+        if abs(va - vb) > 1e-9:
+            return va > vb
+        ea, eb = self.early_points(a), self.early_points(b)
+        if abs(ea - eb) > 1e-9:
+            return ea > eb
+        return self.route_hours(a) < self.route_hours(b) - 1e-9
+
+    def local_search(self, route, weight, max_drop):
+        """Try dropping every run of 1..max_drop consecutive stops and rebuilding;
+        take the first change that scores higher and start over, until none does."""
+        improved = True
+        while improved:
+            improved = False
+            for length in range(1, max_drop + 1):
+                for start in range(len(route) - length + 1):
+                    candidate = self.improve(route[:start] + route[start + length:], weight)
+                    if self.better(candidate, route):
+                        route = candidate
+                        improved = True
+                        break
+                if improved:
+                    break
+        return route
+
+    def swap_search(self, route, weight):
+        """Try replacing each stop with each unvisited bonus; take the first
+        change that scores higher and start over, until none does."""
+        improved = True
+        while improved:
+            improved = False
+            unvisited = [b for b in range(1, len(self.places)) if b not in route]
+            for i in range(len(route)):
+                base = route[:i] + route[i + 1:]
+                stops = [0] + base + [0]
+                for b in unvisited:
+                    _, pos = min((self.hours[stops[k]][b] + self.hours[b][stops[k + 1]]
+                                  - self.hours[stops[k]][stops[k + 1]], k)
+                                 for k in range(len(stops) - 1))
+                    candidate = base[:pos] + [b] + base[pos:]
+                    if self.route_hours(candidate) > self.max_hours:
+                        continue
+                    candidate = self.improve(candidate, weight)
+                    if self.better(candidate, route):
+                        route = candidate
+                        improved = True
+                        break
+                if improved:
+                    break
+        return route
+
+    def search_from(self, start, weight, max_drop):
+        return self.local_search(self.improve(self.insert_greedily(start, weight), weight), weight, max_drop)
+
+    def solve(self, weights, max_drop, workers):
+        # Start once from an empty route, then once from each bonus on its own,
+        # so every bonus gets a chance to anchor the route. Skip bonuses too far
+        # for a round trip, since nothing later would drop them from the route.
+        starts = [[]] + [[b] for b in range(1, len(self.places)) if self.route_hours([b]) <= self.max_hours]
+        tasks = [(start, weight, max_drop) for start in starts for weight in weights]
+        best, best_weight = [], weights[0]
+        with multiprocessing.Pool(workers, initializer=_init_worker, initargs=(self,)) as pool:
+            # imap returns results in task order, so the winner is the same
+            # however many workers there are
+            for n, (route, weight) in enumerate(pool.imap(_search_task, tasks), 1):
+                if self.better(route, best):
+                    best, best_weight = route, weight
+                print(f"\rSearching: {n} of {len(tasks)} starts, best so far {self.route_points(best)} points",
+                      end='', file=sys.stderr, flush=True)
+        print(file=sys.stderr)
+
+        # Polish the winner, alternating swaps and drops until neither helps
+        while True:
+            route = self.local_search(self.swap_search(best, best_weight), best_weight, max_drop)
+            if not self.better(route, best):
+                break
+            best = route
+        # Last, since the searches above reorder stops for shortest driving
+        best = self.front_load_order(best)
+        if len(set(best)) != len(best) or self.route_hours(best) > self.max_hours + 1e-9:
+            sys.exit("ERROR: planner produced an invalid route (repeated bonus or over time); this is a bug")
+        return best
+
+
+# Each worker process gets its own copy of the planner once, rather than with every task
+_worker_planner = None
+
+
+def _init_worker(planner):
+    global _worker_planner
+    _worker_planner = planner
+
+
+def _search_task(task):
+    start, weight, max_drop = task
+    return _worker_planner.search_from(start, weight, max_drop), weight
+
+
+Leg = collections.namedtuple('Leg', 'place leg_miles miles arrive hours score gas')
+
+
+def route_legs(planner, route):
+    """Yield a Leg for HQ, each stop, then HQ. arrive is when you get there,
+    hours is when you leave after its picture, and gas is how many gas stops
+    were made on the way there."""
+    stops = [0] + route + [0]
+    miles = hours = score = 0
+    for a, b in zip([None] + stops, stops):
+        leg_miles = gas = 0
+        if a is not None:
+            leg_miles = planner.miles[a][b]
+            gas = planner.gas_stops(miles + leg_miles) - planner.gas_stops(miles)
+            miles += leg_miles
+            hours += planner.hours[a][b] + gas * planner.gas_hours
+        arrive = hours
+        if a is not None and b != 0:
+            hours += planner.stop_hours
+        score += planner.places[b]['points']
+        yield Leg(planner.places[b], leg_miles, miles, arrive, hours, score, gas)
+
+
+def write_gpx(planner, route, gpx_file_path):
+    """Write the stops as waypoints plus a route through them in order, for
+    Garmin BaseCamp and GPS units. Each stop's comment holds its points."""
+    ET.register_namespace('', GPX_NS)
+    gpx = ET.Element(f'{{{GPX_NS}}}gpx', version='1.1', creator='planRoute.py')
+
+    def add_point(parent, tag, leg, n):
+        place = leg.place
+        point = ET.SubElement(parent, f'{{{GPX_NS}}}{tag}', lat=f"{place['lat']:.6f}", lon=f"{place['lon']:.6f}")
+        ET.SubElement(point, f'{{{GPX_NS}}}name').text = place['code']
+        ET.SubElement(point, f'{{{GPX_NS}}}cmt').text = f"{place['points']} points"
+        gas = f", {leg.gas} gas stop{'s' if leg.gas > 1 else ''} before" if leg.gas else ''
+        if n == 0:
+            when = f"Start, {place['state']}, leave at hour 0"
+        elif n > len(route):
+            when = f"Finish, {place['state']}, arrive by hour {leg.arrive:.2f}{gas}"
+        else:
+            when = f"Stop {n} of {len(route)}, {place['state']}, leave by hour {leg.hours:.2f}{gas}"
+        ET.SubElement(point, f'{{{GPX_NS}}}desc').text = when
+
+    legs = list(route_legs(planner, route))
+    # The waypoint list holds HQ once; the route visits it at both ends
+    for n, leg in enumerate(legs[:-1]):
+        add_point(gpx, 'wpt', leg, n)
+    last = legs[-1]
+    rte = ET.SubElement(gpx, f'{{{GPX_NS}}}rte')
+    ET.SubElement(rte, f'{{{GPX_NS}}}name').text = f"Rally route {last.score} points"
+    ET.SubElement(rte, f'{{{GPX_NS}}}desc').text = (
+        f"{len(route)} bonuses, {last.miles:.0f} estimated miles, "
+        f"{planner.gas_stops(last.miles)} gas stop{'' if planner.gas_stops(last.miles) == 1 else 's'}, "
+        f"{last.hours:.2f} of {planner.max_hours} hours")
+    for n, leg in enumerate(legs):
+        add_point(rte, 'rtept', leg, n)
+
+    ET.indent(gpx)
+    ET.ElementTree(gpx).write(gpx_file_path, encoding='utf-8', xml_declaration=True)
+
+
+def print_route(planner, route):
+    print(f"{'#':>3}  {'Bonus':<24} {'State':<5} {'Points':>6} {'Leg mi':>7} {'Total mi':>8} {'Hours':>6} {'Score':>6}")
+    legs = list(route_legs(planner, route))
+    for n, leg in enumerate(legs):
+        gas = f"  + {leg.gas} gas stop{'s' if leg.gas > 1 else ''} on the way" if leg.gas else ''
+        print(f"{n:>3}  {leg.place['code']:<24} {leg.place['state']:<5} {leg.place['points']:>6} "
+              f"{leg.leg_miles:>7.1f} {leg.miles:>8.1f} {leg.hours:>6.2f} {leg.score:>6}{gas}")
+    last = legs[-1]
+    places = planner.places
+    print()
+    print(f"Bonuses: {len(route)}   Points: {last.score}   Miles: {last.miles:.0f}   "
+          f"Gas stops: {planner.gas_stops(last.miles)}   Hours: {last.hours:.2f} of {planner.max_hours}")
+    print(f"States: {len(set(places[i]['state'] for i in route))}   "
+          f"Points per mile: {last.score / last.miles if last.miles else 0:.1f}")
+
+    # How many points are already banked if the day is cut short
+    banked = []
+    for fraction in (0.25, 0.5, 0.75):
+        cutoff = planner.max_hours * fraction
+        got = sum(leg.place['points'] for leg in legs if leg.arrive <= cutoff)
+        banked.append(f"{got} ({got / last.score:.0%}) by hour {cutoff:g}" if last.score else f"0 by hour {cutoff:g}")
+    print("Banked: " + ", ".join(banked))
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('csv_file', nargs='?', default='bonus-lat-lon-points.csv')
+    parser.add_argument('--hours', type=float, default=9.5, help='time budget in hours (default 9.5)')
+    parser.add_argument('--speed', type=float, default=45, help='average speed in MPH (default 45)')
+    parser.add_argument('--stop-minutes', type=float, default=5,
+                        help='time spent at each bonus taking its picture (default 5)')
+    parser.add_argument('--road-factor', type=float, default=1.0,
+                        help='multiply straight-line miles by this to approximate road miles (default 1.0)')
+    parser.add_argument('--max-drop', type=int, default=6,
+                        help='longest run of stops the search tries dropping at once; more is slower (default 6)')
+    parser.add_argument('--front-load', type=float, default=0,
+                        help='favor collecting points early in the day: each bonus counts as its points x '
+                             '(1 + FRONT_LOAD x fraction of the day left on arrival). 0 keeps the highest total '
+                             'and just orders it to bank points early; 1 trades some total for earlier points '
+                             '(default 0)')
+    parser.add_argument('--workers', type=int, default=os.cpu_count(),
+                        help=f'CPU cores to search with (default all, {os.cpu_count()} here)')
+    parser.add_argument('--gpx', default='route.gpx',
+                        help='also write the route as GPX for Garmin BaseCamp and GPS units (default route.gpx)')
+    add_slow_zone_args(parser)
+    add_gas_args(parser)
+    args = parser.parse_args()
+
+    hq, bonuses = load_bonuses(args.csv_file)
+    slow_zones = slow_zones_from_args(args)
+    planner = Planner(hq, bonuses, args.hours, args.speed, args.stop_minutes, args.road_factor, args.front_load,
+                      slow_zones, args.gas_miles, args.gas_minutes)
+    route = planner.solve(START_WEIGHTS, args.max_drop, max(1, args.workers))
+    print(f"{len(bonuses)} bonuses, {args.hours} hours at {args.speed} MPH, "
+          f"{args.stop_minutes:g} min per stop, road factor {args.road_factor:g}, "
+          f"front-load {args.front_load:g}")
+    print(f"{describe_gas(args)}, {describe_slow_zones(slow_zones)}\n")
+    print_route(planner, route)
+    write_gpx(planner, route, args.gpx)
+    print(f"\nGPX written to {args.gpx}")
+
+
+if __name__ == "__main__":
+    main()
