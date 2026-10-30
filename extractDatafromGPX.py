@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-import csv, os, sys,traceback
+import sys
 import xml.etree.ElementTree as ET
 import pandas as pd
 
@@ -11,11 +11,9 @@ csv_file_path =  sys.argv[1]
 # Read the CSV file into a pandas DataFrame
 # file has the points for each bonus, not in the GPX file
 csvDataFrame = pd.read_csv(csv_file_path,  header=None)
-points = csvDataFrame[csvDataFrame[0].str.contains('RAVE')].iat[0,3]
-print(f"Points: {points}")
 
-# This line for testing...
-# sys.exit()
+# Exact-match lookup of points by bonus code
+points_by_code = dict(zip(csvDataFrame[0].astype(str).str.strip(), csvDataFrame[3]))
 
 
 #
@@ -42,32 +40,43 @@ WPTX1_STATE_TAG = WPTX1_NAMESPACE + "State"
 tree = ET.parse(sys.argv[2])
 root = tree.getroot()
 
+def is_rally_hq(code):
+    return 'Rally' in code
+
+# Rally HQ is the start/finish of every route, so the GPX must have it
+hq_names = [w.findtext(NAME_TAG, '').strip() for w in root.findall(WPT_TAG)]
+if not any(is_rally_hq(name) for name in hq_names):
+    sys.exit(f"ERROR: no 'Rally HQ' waypoint found in {sys.argv[2]}")
+
 # Create merged file with lat-lon from GPX and bonus 
 #   details from CSV file
 with open('bonus-lat-lon-points.csv', 'w') as f:
     # Iterate through child elements
     for bonus in root.findall(WPT_TAG):
-        lat = lon = code = points = ''
-        try:
-            lat = bonus.get('lat')
-            lon = bonus.get('lon')
-            code = bonus.find(NAME_TAG).text
-            state = "N/A"
-            # Search recursively (using .//) for the State tag in the gpxx namespace
-            state_element_gpxx = bonus.find(f".//{GPXX_STATE_TAG}")
-            
-            if state_element_gpxx is not None:
-                state = state_element_gpxx.text
-            else:
-                # If not found in gpxx, try the wptx1 namespace
-                state_element_wptx1 = bonus.find(f".//{WPTX1_STATE_TAG}")
-                if state_element_wptx1 is not None:
-                    state = state_element_wptx1.text
+        lat = bonus.get('lat')
+        lon = bonus.get('lon')
+        name_element = bonus.find(NAME_TAG)
+        code = (name_element.text or '').strip() if name_element is not None else ''
+        state = "N/A"
+        # Search recursively (using .//) for the State tag in the gpxx namespace
+        state_element_gpxx = bonus.find(f".//{GPXX_STATE_TAG}")
 
-            
-            points = csvDataFrame[csvDataFrame[0].str.contains(code)].iat[0,3]
-        except Exception as e:
-            # traceback.print_exc()
+        if state_element_gpxx is not None:
+            state = state_element_gpxx.text
+        else:
+            # If not found in gpxx, try the wptx1 namespace
+            state_element_wptx1 = bonus.find(f".//{WPTX1_STATE_TAG}")
+            if state_element_wptx1 is not None:
+                state = state_element_wptx1.text
+
+        if is_rally_hq(code):
+            # Rally HQ is the start/finish, not a bonus, so it's always worth
+            # nothing, whatever the CSV says
+            points = 0
+        elif code in points_by_code:
+            points = points_by_code[code]
+        else:
+            print(f"WARNING: no points found in {csv_file_path} for waypoint '{code}'", file=sys.stderr)
             points = "ERROR"
             code = code + " ERROR"
 

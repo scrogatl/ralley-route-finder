@@ -1,11 +1,11 @@
 import googlemaps
 from datetime import datetime
-import sys, csv
+import sys, csv, os
 from itertools import combinations
 
 
 def generateDetails(addr1, addr2):
-    gmaps = googlemaps.Client(key='REDACTED_GOOGLE_KEY')
+    gmaps = googlemaps.Client(key=os.environ['GMAPS_API_KEY'])
 
     # Request directions via public transit
     now = datetime.now()

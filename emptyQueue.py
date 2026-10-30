@@ -6,7 +6,7 @@ q = Queue("path_to_queue")
 
 print(f"qsize: {q.qsize()}")
 
-input()
+input("Press Enter to continue...")
 
 while q.qsize() > 0:
     item = q.get()

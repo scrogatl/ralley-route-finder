@@ -1,3 +1,7 @@
 path_to_queue
 .venv
 bonus-lat-long-ponts.csv
+
+.~lock.*
+__pycache__/
+*.log

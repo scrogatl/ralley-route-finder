@@ -1,5 +1,5 @@
 import googlemaps
-import sys, csv
+import sys, csv, os
 from persistqueue import Queue
 from datetime import datetime
 
@@ -12,7 +12,7 @@ print(f"qsize: {q.qsize()}")
 input()
 
 
-gmaps = googlemaps.Client(key='REDACTED_GOOGLE_KEY')
+gmaps = googlemaps.Client(key=os.environ['GMAPS_API_KEY'])
 
 def generateDetails(addr1, addr2):
 
