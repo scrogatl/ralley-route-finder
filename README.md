@@ -301,9 +301,19 @@ It ends with one of:
   how much might be missing. Raise `--time-limit` to keep going.
 
 It starts from `planRoute.py`'s best route, so it never reports a worse one.
-Short days are proven quickly (4 hours takes seconds), but a full day with
-all the bonuses is much harder: a 20-minute run on the 10-hour day stopped
-with the best possible still up to 21% above the route found.
+With the 2026 bonuses and default settings, it proves days up to 8 hours
+in a few minutes:
+
+| Day | Proven best | Solve time | `planRoute.py` |
+| --- | --- | --- | --- |
+| 4 h | 3,173 | 2 s | 3,173 |
+| 6 h | 5,658 | 1 min | 5,658 |
+| 7 h | 6,970 | 3 min | 6,970 |
+| 8 h | 8,774 | 4½ min | 8,655 |
+
+So `planRoute.py` usually finds the best route, but not always (119 points
+short at 8 hours). A full 9.5-hour day is much harder to prove; give it a
+long `--time-limit` and check how big the remaining gap is.
 
 It takes the same options as `planRoute.py`, including gas stops and slow
 zones, except `--front-load`; it only maximizes total points.

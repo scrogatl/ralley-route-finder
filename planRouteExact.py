@@ -34,9 +34,23 @@ def solve_exact(planner, time_limit, workers, hint):
     # Miles in hundredths, also rounded up, for counting gas stops
     hundredths = [[int(-(-m * 100 // 1)) for m in row] for row in planner.miles]
 
+    # Fastest time between every pair of places, allowing detours through
+    # others: with a slow zone, going around it can beat the direct leg, so
+    # the limits below use these times to never rule out a possible route
+    n = len(places)
+    fastest = [row[:] for row in secs]
+    for k in range(n):
+        via_k = fastest[k]
+        for i in range(n):
+            to_k = fastest[i][k]
+            row = fastest[i]
+            for j in range(n):
+                if to_k + via_k[j] < row[j]:
+                    row[j] = to_k + via_k[j]
+
     # Leave out bonuses too far for even a round trip on their own; no
     # route could include them, so this can't change the answer
-    candidates = [b for b in range(1, len(places)) if secs[0][b] + stop + secs[b][0] <= budget]
+    candidates = [b for b in range(1, n) if fastest[0][b] + stop + fastest[b][0] <= budget]
     nodes = [0] + candidates
 
     model = cp_model.CpModel()
@@ -47,7 +61,7 @@ def solve_exact(planner, time_limit, workers, hint):
             if i == j:
                 continue
             # Skip legs that couldn't fit even in a route of just these two bonuses
-            if (i and j and secs[0][i] + stop + secs[i][j] + stop + secs[j][0] > budget):
+            if (i and j and fastest[0][i] + stop + secs[i][j] + stop + fastest[j][0] > budget):
                 continue
             x = model.NewBoolVar(f"{i}_{j}")
             arc_vars[i, j] = x
@@ -74,7 +88,22 @@ def solve_exact(planner, time_limit, workers, hint):
     else:
         model.Add(gas == 0)
     gas_secs = round(planner.gas_hours * SECONDS_PER_HOUR)
-    model.Add(sum(drive) + stop * sum(visit.values()) + gas_secs * gas <= budget)
+    driving = model.NewIntVar(0, budget, 'driving')
+    model.Add(driving == sum(drive))
+    model.Add(driving + stop * sum(visit.values()) + gas_secs * gas <= budget)
+    # Lower limits on driving that every route meets, which let the solver
+    # rule out most routes quickly: a route drives at least the round trip to
+    # each bonus it visits, and at least HQ -> a -> b -> HQ (in the quicker
+    # order) for each pair. A pair that can't fit together is never both visited.
+    for a in candidates:
+        model.Add(driving >= (fastest[0][a] + fastest[a][0]) * visit[a])
+    for n_a, a in enumerate(candidates):
+        for b in candidates[n_a + 1:]:
+            pair = min(fastest[0][a] + fastest[a][b] + fastest[b][0], fastest[0][b] + fastest[b][a] + fastest[a][0])
+            if pair + 2 * stop > budget:
+                model.AddBoolOr([visit[a].Not(), visit[b].Not()])
+            elif pair > max(fastest[0][a] + fastest[a][0], fastest[0][b] + fastest[b][0]):
+                model.Add(driving >= pair * (visit[a] + visit[b] - 1))
     model.Maximize(sum(places[b]['points'] * visit[b] for b in candidates))
 
     # Start the solver from planRoute.py's route, so it begins with a good answer
