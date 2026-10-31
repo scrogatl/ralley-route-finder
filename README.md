@@ -27,14 +27,41 @@ book) live in their own folder, e.g. `SNAFU_2026/`.
 
 ## Directions
 
-1. ### Create combined csv with bonus, lat, lon, points and state
+1. ### Create combined csv with bonus, lat, lon, points, state and hours
 
     Uses the lat/lon from the GPX file (the lat/lon in the CSV may be wrong) and
     the points from the CSV. Always writes `bonus-lat-lon-points.csv` in the
     current directory, overwriting any previous one.
 
+    Give it the rally book PDF as well, and it also stores the hours each
+    bonus is open. It reads each bonus's `Available:` line (`24 hours`, or
+    e.g. `11:00 AM – 1:00 PM`) and adds two columns to the CSV: opening and
+    closing time as 24-hour `HH:MM`, both blank for a bonus open 24 hours.
+    The planners and `checkRoute.py` use them. It warns about any bonus it
+    can't find hours for and treats it as open 24 hours, so check the
+    warnings. Leave the PDF off and the CSV has no hours, as before.
+
+    It also writes `bonus-lat-lon-points.gpx`, a copy of the rally's GPX file
+    with each bonus's points after its name (e.g. `ABAC 510`) and at the
+    front of its description (e.g. `510 points - Abraham Baldwin Agricultural
+    College`), for loading into BaseCamp, a GPS or GPX Studio so the points
+    show with each waypoint. A bonus with hours has them in its description
+    too (e.g. `960 points, open 11:00-13:00 - ...`). Use it only for viewing: the planners read the
+    CSV, and the renamed waypoints no longer match the bonus codes, so don't
+    feed it back into this script. Each bonus's
+    symbol is also a Garmin number showing its points in hundreds, so the big
+    ones stand out on the map: a 630-point bonus shows a 6, and 900 points or
+    more shows a 9. The number reads without relying on color; color only
+    backs it up, blue under 500 points and red from 500 (no green, which is
+    hard to tell from red with red-green color blindness). Garmin BaseCamp
+    and GPS units show these symbols; GPX Studio doesn't support them and
+    shows a plain marker, so there the name carries the points. To change the
+    colors or where they switch, edit `HIGH_POINTS`, `LOW_COLOR` and
+    `HIGH_COLOR` at the top of `extractDatafromGPX.py`. Everything else in the
+    file is unchanged.
+
     ```bash
-    python extractDatafromGPX.py "SNAFU_2026/2026 SNAFU Bonus_Code-Lat-Long-Points_CSV - Rev E.csv" "SNAFU_2026/SNAFU 2026 - MASTER cao 11 Aug 26.gpx"
+    python extractDatafromGPX.py "SNAFU_2026/2026 SNAFU Bonus_Code-Lat-Long-Points_CSV - Rev E.csv" "SNAFU_2026/SNAFU 2026 - MASTER cao 11 Aug 26.gpx" "SNAFU_2026/2026 SNAFU Rally Book Rev I.pdf"
     ```
 
     The GPX must have a waypoint with "Rally" in its name (e.g. `Rally HQ
@@ -83,7 +110,17 @@ distance ÷ average speed, plus a stop at each bonus to take its picture and a
 gas stop every 175 miles. Driving through Atlanta (inside I-285 plus about 5
 miles) is slowed to 25 MPH. The
 route starts and ends at Rally HQ and fits in the time budget. It prints each
-stop in order with leg miles, running hours and running score.
+stop in order with leg miles, running hours, arrival time and running score.
+
+**Bonus hours.** If the CSV has hours from the rally book (step 1), a route
+only counts a bonus it reaches while it's open. It reaches one early only by
+waiting there until it opens, and that wait comes out of the time budget; it
+never reaches one after it closes. Hours are clock times, counted from the
+rally start (`--start`, 7:00 by default, as in the 2026 rally book). The
+table shows each bonus's hours and any wait, e.g. `waits 12 min to open at
+11:00`. `--ignore-hours` plans as if every bonus were open all day, to see
+what the hours cost. With the 2026 defaults, the hours cost 557 points:
+10,546 instead of 11,103.
 
 It also writes the route as a GPX file for Garmin BaseCamp and GPS units,
 named with when it was made and the route's points, e.g.
@@ -127,6 +164,8 @@ PyPy.
 | `--max-drop` | 6 | Longest run of stops the search tries removing at once; higher is slower |
 | `--front-load` | 0 | Favor collecting points early, in case the day is cut short (see below) |
 | `--first` | none | Start with these bonuses, in this order, e.g. `CGSH,SMCH` (see below) |
+| `--start` | 07:00 | Rally start time, for the hours bonuses are open |
+| `--ignore-hours` | | Plan as if every bonus is open all day |
 | `--workers` | all cores | How many CPU cores to search with |
 | `--gpx` | route-DATE-TIME-POINTSpts.gpx | Where to write the GPX file |
 
@@ -242,8 +281,14 @@ It prints, for each stop:
 - the straight-line miles the plan used and Google's road miles;
 - Google's driving time for the leg;
 - when you'd arrive and leave, counting the picture stops and gas stops the
-  same way `planRoute.py` does;
+  same way `planRoute.py` does, and the time of day you'd arrive;
 - the running score.
+
+It uses the bonus hours in `bonus-lat-lon-points.csv` (`--bonuses` names
+another file), counted from the rally start: `--start`, or the time of
+`--depart` if given. Arriving before a bonus opens, it waits; arriving after
+it closes, the bonus is marked `MISSED` and its points aren't counted, and
+the summary lists every missed bonus.
 
 Then it says whether the day `FITS`, with the minutes to spare, or is
 `OVER`, and by how much. Last, it suggests a `--road-factor` (road miles ÷
@@ -279,6 +324,8 @@ for current numbers.
 | `--stop-minutes` | 5 | Time at each bonus to take its picture |
 | `--gas-miles` | 175 | Stop for gas each time the route passes another this many miles; 0 for none |
 | `--gas-minutes` | 10 | Time for each gas stop |
+| `--bonuses` | bonus-lat-lon-points.csv | Bonus file with the hours bonuses are open |
+| `--start` | 07:00 | Rally start time, for bonus hours (the time of `--depart` if given) |
 | `--gpx` | route-google-DATE-TIME-POINTSpts.gpx | Where to write the GPX file |
 
 ## Provably best route
@@ -316,5 +363,14 @@ So `planRoute.py` usually finds the best route, but not always (119 points
 short at 8 hours). A full 9.5-hour day is much harder to prove; give it a
 long `--time-limit` and check how big the remaining gap is.
 
-It takes the same options as `planRoute.py`, including gas stops and slow
-zones, except `--front-load`; it only maximizes total points.
+With the 2026 bonus hours, it proves the same points as `planRoute.py` for
+4, 5 and 6 hours: 2,974, 3,661 and 5,253, in 7 s, 3 min and 8 min. The hours
+make it slower, since it has to time every route.
+
+It takes the same options as `planRoute.py`, including gas stops, slow
+zones and bonus hours, except `--front-load`; it only maximizes total points.
+
+The solver works in hundredths of a second and rounds driving times up to
+be safe, so it could rule out a route that fits with less than a second to
+spare. If `planRoute.py` finds such a route scoring more, it reports that
+route instead, marked `NOT PROVEN`.

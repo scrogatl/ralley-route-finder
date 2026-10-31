@@ -19,8 +19,10 @@ import argparse, os, sys, threading, time
 from ortools.sat.python import cp_model
 import planRoute
 
-# The solver needs whole numbers, so times are in seconds
-SECONDS_PER_HOUR = 3600
+# The solver needs whole numbers, so times are in hundredths of a second:
+# fine enough that rounding them up for safety only rules out a route that
+# fits within a fraction of a second
+TICKS_PER_HOUR = 360_000
 
 
 class Progress(cp_model.CpSolverSolutionCallback):
@@ -66,14 +68,49 @@ class Progress(cp_model.CpSolverSolutionCallback):
         print(file=sys.stderr)
 
 
+def add_bonus_hours(model, candidates, arc_vars, windows, ticks, hundredths, stop, budget, gas, gas_ticks,
+                    interval):
+    """Time the route, so each bonus with hours is reached while it's open.
+
+    photo[b] is when b's photo is taken, in ticks after the start; it can
+    be later than arriving (waiting for b to open), never earlier. Gas stops
+    are made on the leg where the odometer passes each interval, as
+    planRoute.py times them: odometer[b] is the miles (in hundredths) driven
+    to reach b, and gas_before[b] the gas stops made by then.
+    """
+    photo = {b: model.NewIntVar(*windows.get(b, (0, budget)), f"photo_{b}") for b in candidates}
+    if interval:
+        odometer = {b: model.NewIntVar(0, 100_000_000, f"odometer_{b}") for b in candidates}
+        gas_before = {b: model.NewIntVar(0, 1000, f"gas_before_{b}") for b in candidates}
+        for b in candidates:
+            # gas_before = floor(odometer / interval)
+            model.Add(interval * gas_before[b] <= odometer[b])
+            model.Add(interval * gas_before[b] >= odometer[b] - interval + 1)
+    else:
+        gas_before = dict.fromkeys(candidates, 0)
+    for (i, j), x in arc_vars.items():
+        if i == 0:
+            if interval:
+                model.Add(odometer[j] == hundredths[0][j]).OnlyEnforceIf(x)
+            model.Add(photo[j] >= ticks[0][j] + gas_ticks * gas_before[j]).OnlyEnforceIf(x)
+        elif j == 0:
+            # Back at HQ in time, with the rest of the gas stops on the way
+            model.Add(photo[i] + stop + ticks[i][0] + gas_ticks * (gas - gas_before[i]) <= budget).OnlyEnforceIf(x)
+        else:
+            if interval:
+                model.Add(odometer[j] == odometer[i] + hundredths[i][j]).OnlyEnforceIf(x)
+            model.Add(photo[j] >= photo[i] + stop + ticks[i][j]
+                      + gas_ticks * (gas_before[j] - gas_before[i])).OnlyEnforceIf(x)
+
+
 def solve_exact(planner, time_limit, workers, hint):
     """Return (route, status text, best possible points)."""
     places = planner.places
-    budget = int(planner.max_hours * SECONDS_PER_HOUR)
-    stop = round(planner.stop_hours * SECONDS_PER_HOUR)
+    budget = int(planner.max_hours * TICKS_PER_HOUR)
+    stop = round(planner.stop_hours * TICKS_PER_HOUR)
     # Round driving times up so a route the solver accepts never runs over
     # when checked with exact times
-    secs = [[int(-(-h * SECONDS_PER_HOUR // 1)) for h in row] for row in planner.hours]
+    ticks = [[int(-(-h * TICKS_PER_HOUR // 1)) for h in row] for row in planner.hours]
     # Miles in hundredths, also rounded up, for counting gas stops
     hundredths = [[int(-(-m * 100 // 1)) for m in row] for row in planner.miles]
 
@@ -81,7 +118,7 @@ def solve_exact(planner, time_limit, workers, hint):
     # others: with a slow zone, going around it can beat the direct leg, so
     # the limits below use these times to never rule out a possible route
     n = len(places)
-    fastest = [row[:] for row in secs]
+    fastest = [row[:] for row in ticks]
     for k in range(n):
         via_k = fastest[k]
         for i in range(n):
@@ -91,9 +128,20 @@ def solve_exact(planner, time_limit, workers, hint):
                 if to_k + via_k[j] < row[j]:
                     row[j] = to_k + via_k[j]
 
-    # Leave out bonuses too far for even a round trip on their own; no
-    # route could include them, so this can't change the answer
-    candidates = [b for b in range(1, n) if fastest[0][b] + stop + fastest[b][0] <= budget]
+    # Bonus hours in ticks after the start, rounded inward so a route the
+    # solver accepts always makes them when checked with exact times
+    windows = {}
+    if planner.windows is not None:
+        for b, window in enumerate(planner.windows):
+            if window:
+                windows[b] = (max(0, int(-(-window[0] * TICKS_PER_HOUR // 1))),
+                              min(budget, int(window[1] * TICKS_PER_HOUR // 1)))
+
+    # Leave out bonuses too far for even a round trip on their own, or that
+    # close before you could get there; no route could include them, so this
+    # can't change the answer
+    candidates = [b for b in range(1, n) if fastest[0][b] + stop + fastest[b][0] <= budget
+                  and (b not in windows or max(fastest[0][b], windows[b][0]) <= windows[b][1])]
     nodes = [0] + candidates
 
     model = cp_model.CpModel()
@@ -104,12 +152,12 @@ def solve_exact(planner, time_limit, workers, hint):
             if i == j:
                 continue
             # Skip legs that couldn't fit even in a route of just these two bonuses
-            if (i and j and fastest[0][i] + stop + secs[i][j] + stop + fastest[j][0] > budget):
+            if (i and j and fastest[0][i] + stop + ticks[i][j] + stop + fastest[j][0] > budget):
                 continue
             x = model.NewBoolVar(f"{i}_{j}")
             arc_vars[i, j] = x
             arcs.append((nodes.index(i), nodes.index(j), x))
-            drive.append(secs[i][j] * x)
+            drive.append(ticks[i][j] * x)
             distance.append(hundredths[i][j] * x)
     # A bonus that isn't visited loops back on itself, outside the route
     for b in candidates:
@@ -130,10 +178,10 @@ def solve_exact(planner, time_limit, workers, hint):
         model.Add(interval * gas >= sum(distance) - interval + 1)
     else:
         model.Add(gas == 0)
-    gas_secs = round(planner.gas_hours * SECONDS_PER_HOUR)
+    gas_ticks = round(planner.gas_hours * TICKS_PER_HOUR)
     driving = model.NewIntVar(0, budget, 'driving')
     model.Add(driving == sum(drive))
-    model.Add(driving + stop * sum(visit.values()) + gas_secs * gas <= budget)
+    model.Add(driving + stop * sum(visit.values()) + gas_ticks * gas <= budget)
     # Lower limits on driving that every route meets, which let the solver
     # rule out most routes quickly: a route drives at least the round trip to
     # each bonus it visits, and at least HQ -> a -> b -> HQ (in the quicker
@@ -147,6 +195,9 @@ def solve_exact(planner, time_limit, workers, hint):
                 model.AddBoolOr([visit[a].Not(), visit[b].Not()])
             elif pair > max(fastest[0][a] + fastest[a][0], fastest[0][b] + fastest[b][0]):
                 model.Add(driving >= pair * (visit[a] + visit[b] - 1))
+    if planner.windows is not None:
+        add_bonus_hours(model, candidates, arc_vars, windows, ticks, hundredths, stop, budget, gas, gas_ticks,
+                        round(planner.gas_miles * 100))
     model.Maximize(sum(places[b]['points'] * visit[b] for b in candidates))
 
     # Start the solver from planRoute.py's route, so it begins with a good answer
@@ -195,12 +246,13 @@ def main():
     planRoute.add_slow_zone_args(parser)
     planRoute.add_gas_args(parser)
     planRoute.add_first_args(parser)
+    planRoute.add_hours_args(parser)
     args = parser.parse_args()
 
     hq, bonuses = planRoute.load_bonuses(args.csv_file)
     slow_zones = planRoute.slow_zones_from_args(args)
     planner = planRoute.Planner(hq, bonuses, args.hours, args.speed, args.stop_minutes, args.road_factor, 0,
-                                slow_zones, args.gas_miles, args.gas_minutes)
+                                slow_zones, args.gas_miles, args.gas_minutes, args.start, not args.ignore_hours)
     planRoute.apply_first(planner, args)
     # Start from planRoute.py's full search, so this never reports a worse route
     hint = planner.solve(planRoute.START_WEIGHTS, 6, max(1, args.workers))
@@ -214,15 +266,25 @@ def main():
             or route[:len(planner.lead)] != planner.lead):
         sys.exit("ERROR: solver returned an invalid route (repeated bonus, over time or --first stops "
                  "moved); this is a bug")
+    # The solver rounds times up to be safe, so a route that fits with a
+    # fraction of a second to spare can look too long to it; never report
+    # worse than planRoute.py's route
+    rounded_out = planner.route_points(hint) > planner.route_points(route)
+    if rounded_out:
+        route = hint
 
     points = planner.route_points(route)
     print(f"{len(bonuses)} bonuses, {args.hours} hours at {args.speed} MPH, "
           f"{args.stop_minutes:g} min per stop, road factor {args.road_factor:g}")
     print(f"{planRoute.describe_gas(args)}, {planRoute.describe_slow_zones(slow_zones)}, "
-          f"{planRoute.describe_first(planner)}\n")
+          f"{planRoute.describe_first(planner)}")
+    print(f"{planRoute.describe_hours(planner)}\n")
     planRoute.print_route(planner, route)
     print()
-    if status == 'OPTIMAL':
+    if rounded_out:
+        print(f"NOT PROVEN: planRoute.py's {points}-point route fits with less than a second to spare, which "
+              f"the solver's rounding rules out, so it couldn't check routes that tight. This is that route.")
+    elif status == 'OPTIMAL':
         print(f"PROVEN OPTIMAL: no route scores more than {points} points under these assumptions "
               f"(solved in {seconds:.0f} s)")
     else:
