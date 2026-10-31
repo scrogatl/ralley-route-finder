@@ -1,7 +1,8 @@
 # SNAFU rally route planner
 
-Finds a high-scoring route through the SNAFU rally bonus locations, using
-driving distances and times from the Google Maps Directions API.
+Finds a high-scoring route through the SNAFU rally bonus locations from
+straight-line distances, then checks it on real roads with the Google Maps
+Routes API.
 
 ## Setup
 
@@ -13,8 +14,9 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Steps 4 and up call the Google Maps API, which needs an API key in the
-environment:
+Step 3 calls the Google Maps Routes API. It needs an API key from a Google
+Cloud project with the **Routes API** turned on (Google Cloud console → APIs
+& Services → Library → Routes API → Enable), set in the environment:
 
 ```bash
 export GMAPS_API_KEY=your-key-here
@@ -42,54 +44,36 @@ book) live in their own folder, e.g. `SNAFU_2026/`.
     is printed as a warning and written with `ERROR` in place of its points;
     fix those before continuing.
 
-2. ### Create a list of combinations
+2. ### Plan the route
 
-    Builds every ordered pair of bonuses from the file made in step 1.
-
-    Output is `bonus1, bonus2, latlon1, latlon2, points at destination`
-
-    ```bash
-    python generateCombinationsFile.py bonus-lat-lon-points.csv combos.csv
-    ```
-
-3. ### Add the combos to a persistent queue
-
-    This helps save $$$. It puts the combinations on a local, persistent queue
-    (`path_to_queue/`), so if step 4 is interrupted it can be restarted without
-    re-running anything already sent to Google's API.
-
-    The queue keeps whatever was already in it, so empty it first if it holds
-    pairs from an earlier run:
+    Finds a high-scoring route from the file made in step 1, using
+    straight-line distances, and writes it to `route.gpx`. It's free: no
+    Google API calls. See [Planning the route](#planning-the-route) for the
+    options.
 
     ```bash
-    python emptyQueue.py
-    python enqueueCSV.py combos.csv
+    python planRoute.py
     ```
 
-4. ### Read from queue and query Google API, storing results in csv
+3. ### Check the route on real roads with Google Maps
 
-    **NOTE: This costs about $300 to run!!!!**
-
-    Prints the queue size and waits for Enter before calling the API. Results
-    are appended to the output file, so start with a fresh file for a new year.
+    Sends the stops in `route.gpx` to the Google Maps Routes API, in
+    order, and shows the real road miles and driving times, and whether the
+    day still fits. It is normally inside Google's free monthly usage. See
+    [Checking the route with Google Maps](#checking-the-route-with-google-maps).
 
     ```bash
-    python getDirections.py segments.csv
+    python checkRoute.py --depart "2026-11-07 07:00"   # your rally's start time
     ```
 
-5. ### Search all segments for best route
+    If it prints `OVER`, or the planned and real times differ a lot, plan
+    again with the `--road-factor` and `--speed` it suggests, and check the
+    new route.
 
-    Also reads `bonus-lat-lon-points.csv` from step 1 to look up each bonus's
-    state.
-
-    ```bash
-    python searchSegments.py segments.csv
-    ```
-
-## Quick route plan without the Google API
+## Planning the route
 
 `planRoute.py` plans a route using only the file made in step 1, so it's free.
-Run it after step 1; steps 2–5 aren't needed. It searches thoroughly, so
+It searches thoroughly, so
 it can take a few minutes; it uses all CPU cores and shows its progress
 while it runs.
 
@@ -159,6 +143,120 @@ The output ends with a `Banked:` line showing the points collected by a
 quarter, half and three quarters of the way through the day. Compare that
 line across a few `--front-load` values to choose one.
 
+### How the search works
+
+`planRoute.py` builds a route by adding bonuses one at a time, then keeps
+trying changes to it and keeps any change that scores higher. It repeats
+this from many different starting points and returns the best result. There
+is no randomness, so the same inputs always give the same route.
+
+**Scoring.** A route's time is its driving time (straight-line miles × road
+factor ÷ speed, slower inside a slow zone), plus the stop at each bonus, plus
+the gas stops. A route over the time budget is rejected. Its value is its
+total points, plus the early-arrival credit when `--front-load` is above 0.
+When two routes are compared, the higher value wins; on a tie, the one that
+collects its points sooner; then the one that takes less time.
+
+1. **Add the best-value bonus until nothing fits** (`insert_greedily`). For
+   every unvisited bonus, at every place it could go in the route, work out
+   the extra time it would add, including any extra gas stop. Skip anything
+   that would go over budget, add the bonus and position with the best
+   *points ÷ (extra hours) ^ weight*, and repeat. A weight above 1 favors
+   nearby bonuses; below 1, it will drive farther for big ones. With
+   front-loading on, the points also count credit for arriving early, minus
+   the delay the new stop causes every stop after it.
+2. **Tidy the order** (`two_opt`, `orient`). Reverse any stretch of the route
+   that cuts total time, which removes places where it crosses itself. With
+   front-loading on, a reversal that raises the value is also kept, as long
+   as the route still fits. Then drive the loop in whichever direction
+   collects points sooner, and run step 1 again in case the time saved makes
+   room for another bonus.
+3. **Drop stops and refill** (`local_search`). Try removing each run of 1 to
+   `--max-drop` stops in a row and refilling with steps 1 and 2. Take the
+   first refill that beats the current route and start over, until no
+   removal helps. This gets the search out of early choices that looked good
+   at the time but blocked better combinations later.
+4. **Many starting points** (`solve`). Run steps 1–3 from an empty route and
+   from each bonus on its own (skipping bonuses too far for a round trip), so
+   every bonus gets a chance to anchor the route. Each start is tried with
+   weights 0.5, 0.75, 1, 1.5 and 2, which is about 675 runs for 2026. The
+   runs are spread across all CPU cores and their results are compared in a
+   fixed order, so the winner doesn't depend on how many cores there are.
+5. **Polish the winner.** Alternate a swap search (`swap_search`: replace
+   each stop with each unvisited bonus, then refill) with step 3 until
+   neither helps. Then reorder the stops (`front_load_order`: reverse any
+   stretch or move any one stop) to collect points sooner within the budget,
+   without changing which bonuses are visited. Finally, check that no bonus
+   repeats and the route fits the budget.
+
+**Limits.**
+
+- It only keeps changes that score higher right away, so it can miss a
+  better route that's only reachable through a worse one in between. For
+  example, it never swaps two stops for three different ones in one move.
+  `planRouteExact.py` (below) is meant to close that gap.
+- Distances are straight lines at one average speed. Rivers, mountains and
+  missing roads are only covered by `--road-factor`.
+- Gas stops are counted for every `--gas-miles` driven in total. Where in
+  the day they fall, and whether a station is nearby, isn't considered.
+
+## Checking the route with Google Maps
+
+`planRoute.py` and `planRouteExact.py` only estimate distances, as straight
+lines. `checkRoute.py` asks the Google Maps Routes API for the real
+driving route through the stops in a GPX file they wrote (`route.gpx` by
+default; pass `route-exact.gpx` to check that one), keeping the same order.
+
+```bash
+python checkRoute.py                                   # route.gpx, no traffic
+python checkRoute.py --depart "2026-11-07 07:00"       # with traffic forecast
+python checkRoute.py route-exact.gpx --hours 9.5
+```
+
+It prints, for each stop:
+
+- the straight-line miles the plan used and Google's road miles;
+- Google's driving time for the leg;
+- when you'd arrive and leave, counting the picture stops and gas stops the
+  same way `planRoute.py` does;
+- the running score.
+
+Then it says whether the day `FITS`, with the minutes to spare, or is
+`OVER`, and by how much. Last, it suggests a `--road-factor` (road miles ÷
+straight-line miles) and `--speed` (road miles ÷ driving hours) for
+`planRoute.py` that match Google's numbers. With the default Atlanta slow
+zone on, the plan also slows Atlanta driving on top of that speed, so plan
+with `--no-slow-zone` too if you use the suggested speed for a route that
+goes through Atlanta.
+
+It also writes `route-google.gpx`: the same waypoints and route as
+`route.gpx` with Google's times in each description, plus a track along the
+roads Google chose, for BaseCamp and GPS units.
+
+**Traffic.** Without `--depart` the whole route goes in one request (one per
+25 stops) and the times have no traffic. With `--depart`, each leg is its own
+request, leaving when you'd leave that stop, so each leg gets Google's
+traffic forecast for that time of day. The time is in your computer's time
+zone unless you add one (`"2026-11-07 07:00-05:00"`), and it must be in the
+future.
+
+**Cost.** One request for a route of up to 25 stops, or one per leg with
+`--depart` (about 20 for a full day). Google gives 5,000 free requests a
+month of the kind that uses traffic or more than 10 stops, and 10,000 of the
+basic kind, so checking a route is normally free; past that it's $5–10 per
+1,000 requests. Check Google's
+[pricing list](https://developers.google.com/maps/billing-and-pricing/pricing)
+for current numbers.
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--depart` | none | When you leave Rally HQ; turns on the traffic forecast |
+| `--hours` | 9.5 | Time budget, Rally HQ to Rally HQ |
+| `--stop-minutes` | 5 | Time at each bonus to take its picture |
+| `--gas-miles` | 175 | Stop for gas each time the route passes another this many miles; 0 for none |
+| `--gas-minutes` | 10 | Time for each gas stop |
+| `--gpx` | route-google.gpx | Where to write the GPX file |
+
 ## Provably best route
 
 `planRouteExact.py` uses the same assumptions and prints the same table and
@@ -185,7 +283,3 @@ with the best possible still up to 21% above the route found.
 
 It takes the same options as `planRoute.py`, including gas stops and slow
 zones, except `--front-load`; it only maximizes total points.
-
-The search has no randomness, so the same inputs always give the same route.
-It tries starting the route from every bonus and keeps the best result, but
-it's still a heuristic, so it can't guarantee the very best route.
