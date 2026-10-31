@@ -198,11 +198,23 @@ def solve_exact(planner, time_limit, workers, hint):
     if planner.windows is not None:
         add_bonus_hours(model, candidates, arc_vars, windows, ticks, hundredths, stop, budget, gas, gas_ticks,
                         round(planner.gas_miles * 100))
-    model.Maximize(sum(places[b]['points'] * visit[b] for b in candidates))
+    # A combo scores only if every one of its bonuses is visited; one with a
+    # bonus no route can reach can't score at all
+    combos = []
+    for code, points, members in planner.combos:
+        if members <= set(candidates):
+            got = model.NewBoolVar(f"combo_{code}")
+            for b in members:
+                model.AddImplication(got, visit[b])
+            combos.append((got, points, members))
+    model.Maximize(sum(places[b]['points'] * visit[b] for b in candidates)
+                   + sum(points * got for got, points, _ in combos))
 
     # Start the solver from planRoute.py's route, so it begins with a good answer
     for b in candidates:
         model.AddHint(visit[b], b in hint)
+    for got, _, members in combos:
+        model.AddHint(got, members <= set(hint))
     hint_arcs = set(zip([0] + hint, hint + [0]))
     for (i, j), x in arc_vars.items():
         model.AddHint(x, (i, j) in hint_arcs)
@@ -247,6 +259,7 @@ def main():
     planRoute.add_gas_args(parser)
     planRoute.add_first_args(parser)
     planRoute.add_hours_args(parser)
+    planRoute.add_combo_args(parser)
     args = parser.parse_args()
 
     hq, bonuses = planRoute.load_bonuses(args.csv_file)
@@ -254,6 +267,7 @@ def main():
     planner = planRoute.Planner(hq, bonuses, args.hours, args.speed, args.stop_minutes, args.road_factor, 0,
                                 slow_zones, args.gas_miles, args.gas_minutes, args.start, not args.ignore_hours)
     planRoute.apply_first(planner, args)
+    planRoute.apply_combos(planner, args)
     # Start from planRoute.py's full search, so this never reports a worse route
     hint = planner.solve(planRoute.START_WEIGHTS, 6, max(1, args.workers))
     print(f"Solving: starting from a {planner.route_points(hint)}-point route, "
@@ -278,7 +292,8 @@ def main():
           f"{args.stop_minutes:g} min per stop, road factor {args.road_factor:g}")
     print(f"{planRoute.describe_gas(args)}, {planRoute.describe_slow_zones(slow_zones)}, "
           f"{planRoute.describe_first(planner)}")
-    print(f"{planRoute.describe_hours(planner)}\n")
+    print(f"{planRoute.describe_hours(planner)}")
+    print(f"{planRoute.describe_combos(planner)}\n")
     planRoute.print_route(planner, route)
     print()
     if rounded_out:

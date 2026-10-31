@@ -27,7 +27,7 @@ book) live in their own folder, e.g. `SNAFU_2026/`.
 
 ## Directions
 
-1. ### Create combined csv with bonus, lat, lon, points, state and hours
+1. ### Create combined csv with bonus, lat, lon, points, state and hours, and the combos
 
     Uses the lat/lon from the GPX file (the lat/lon in the CSV may be wrong) and
     the points from the CSV. Always writes `bonus-lat-lon-points.csv` in the
@@ -41,12 +41,22 @@ book) live in their own folder, e.g. `SNAFU_2026/`.
     can't find hours for and treats it as open 24 hours, so check the
     warnings. Leave the PDF off and the CSV has no hours, as before.
 
+    From the PDF's COMBINATION BONUSES section it also writes
+    `bonus-combos.csv`, one line per combo: its code, its points, and the
+    bonuses you need for it, e.g. `EAGLE, 3500, BISH GSUE STRU WJMS WWRD`. A
+    combo's points come on top of its bonuses' own points, once you get every
+    one of them. It lists the combos it found and warns about one with no
+    points, no bonuses, or a bonus code that isn't in the CSV. The planners and
+    `checkRoute.py` read it. Without the PDF it isn't written (an old one is
+    left as it was).
+
     It also writes `bonus-lat-lon-points.gpx`, a copy of the rally's GPX file
     with each bonus's points after its name (e.g. `ABAC 510`) and at the
     front of its description (e.g. `510 points - Abraham Baldwin Agricultural
     College`), for loading into BaseCamp, a GPS or GPX Studio so the points
     show with each waypoint. A bonus with hours has them in its description
-    too (e.g. `960 points, open 11:00-13:00 - ...`). Use it only for viewing: the planners read the
+    too, and a bonus in a combo has the combo's code (e.g. `960 points, open
+    11:00-13:00, EAGLE combo - ...`). Use it only for viewing: the planners read the
     CSV, and the renamed waypoints no longer match the bonus codes, so don't
     feed it back into this script. Each bonus's
     symbol is also a Garmin number showing its points in hundreds, so the big
@@ -122,6 +132,25 @@ table shows each bonus's hours and any wait, e.g. `waits 12 min to open at
 what the hours cost. With the 2026 defaults, the hours cost 557 points:
 10,546 instead of 11,103.
 
+**Combos.** If `bonus-combos.csv` exists (step 1), a route that visits every
+bonus in a combo also scores the combo's points. The table notes the stop that
+completes one, e.g. `completes EAGLE combo +3500`, and the summary has a
+`Combos:` line listing the combos scored and any only partly visited (which
+score nothing extra). `--combos` names another file and `--ignore-combos`
+plans without them.
+
+On the 2026 map no combo is worth it in a one-day rally. EAGLE (3,500) needs
+about 12¾ hours to visit just its 5 bonuses from Rally HQ and back, at the road factor and
+speed Google's checks suggest (`--road-factor 1.22 --speed 46`), and BLACK and
+ROSEN (2,000 each) about 11 hours, so none fits a 9½-hour day. CLOCK and MERCER
+(500 each) fit, but cost more than they add: forcing MERCER into the best
+route scores 8,292 instead of 8,667, and CLOCK 5,420. Checked with Google's
+traffic, that MERCER route scores 7,636 and is back 36 minutes late. Even on straight-line
+distances, BLACK, ROSEN and MERCER cost 4,200, 4,400 and 1,100 points. To try
+this yourself, copy `bonus-combos.csv`, give one combo a huge value such as
+100000 so the search must include it, plan with `--combos` and that copy, and
+subtract it from the score again.
+
 It also writes the route as a GPX file for Garmin BaseCamp and GPS units,
 named with when it was made and the route's points, e.g.
 `route-20261031-143005-11103pts.gpx` (or the name given with `--gpx`), so a
@@ -137,7 +166,7 @@ python planRoute.py --hours 8 --speed 50  # different time budget and speed
 
 It only uses Python's standard library, so it also runs under
 [PyPy](https://pypy.org), a faster Python, with the same results. A full
-run takes about 20 seconds with PyPy versus 2½ minutes with regular Python.
+run takes about 40 seconds with PyPy versus 5 minutes with regular Python.
 To set it up (no install or admin rights needed):
 
 ```bash
@@ -166,6 +195,8 @@ PyPy.
 | `--first` | none | Start with these bonuses, in this order, e.g. `CGSH,SMCH` (see below) |
 | `--start` | 07:00 | Rally start time, for the hours bonuses are open |
 | `--ignore-hours` | | Plan as if every bonus is open all day |
+| `--combos` | bonus-combos.csv | Combo bonuses from the rally book, used if the file exists |
+| `--ignore-combos` | | Plan without the combo bonuses |
 | `--workers` | all cores | How many CPU cores to search with |
 | `--gpx` | route-DATE-TIME-POINTSpts.gpx | Where to write the GPX file |
 
@@ -215,7 +246,8 @@ is no randomness, so the same inputs always give the same route.
 **Scoring.** A route's time is its driving time (straight-line miles × road
 factor ÷ speed, slower inside a slow zone), plus the stop at each bonus, plus
 the gas stops. A route over the time budget is rejected. Its value is its
-total points, plus the early-arrival credit when `--front-load` is above 0.
+total points, including any combos it completes, plus the early-arrival
+credit when `--front-load` is above 0.
 When two routes are compared, the higher value wins; on a tie, the one that
 collects its points sooner; then the one that takes less time.
 
@@ -224,7 +256,8 @@ collects its points sooner; then the one that takes less time.
    the extra time it would add, including any extra gas stop. Skip anything
    that would go over budget, add the bonus and position with the best
    *points ÷ (extra hours) ^ weight*, and repeat. A weight above 1 favors
-   nearby bonuses; below 1, it will drive farther for big ones. With
+   nearby bonuses; below 1, it will drive farther for big ones. The one
+   bonus still missing from a combo also counts the combo's points. With
    front-loading on, the points also count credit for arriving early, minus
    the delay the new stop causes every stop after it.
 2. **Tidy the order** (`two_opt`, `orient`). Reverse any stretch of the route
@@ -241,7 +274,10 @@ collects its points sooner; then the one that takes less time.
 4. **Many starting points** (`solve`). Run steps 1–3 from an empty route and
    from each bonus on its own (skipping bonuses too far for a round trip), so
    every bonus gets a chance to anchor the route. Each start is tried with
-   weights 0.5, 0.75, 1, 1.5 and 2, which is about 675 runs for 2026. The
+   weights 0.5, 0.75, 1, 1.5 and 2, which is about 675 runs for 2026. Adding
+   one bonus at a time rarely builds a whole combo, so it also starts from
+   each set of combos whose bonuses fit in the day together, a route through
+   all of them. The
    runs are spread across all CPU cores and their results are compared in a
    fixed order, so the winner doesn't depend on how many cores there are.
 5. **Polish the winner.** Alternate a swap search (`swap_search`: replace
@@ -288,7 +324,9 @@ It uses the bonus hours in `bonus-lat-lon-points.csv` (`--bonuses` names
 another file), counted from the rally start: `--start`, or the time of
 `--depart` if given. Arriving before a bonus opens, it waits; arriving after
 it closes, the bonus is marked `MISSED` and its points aren't counted, and
-the summary lists every missed bonus.
+the summary lists every missed bonus. A combo counts only if every one of its
+bonuses is made in time (`--combos`, default `bonus-combos.csv`); one lost to
+a missed bonus is listed as `LOST` on the `Combos:` line.
 
 Then it says whether the day `FITS`, with the minutes to spare, or is
 `OVER`, and by how much. Last, it suggests a `--road-factor` (road miles ÷
@@ -326,6 +364,7 @@ for current numbers.
 | `--gas-minutes` | 10 | Time for each gas stop |
 | `--bonuses` | bonus-lat-lon-points.csv | Bonus file with the hours bonuses are open |
 | `--start` | 07:00 | Rally start time, for bonus hours (the time of `--depart` if given) |
+| `--combos` | bonus-combos.csv | Combo bonuses, scored when every bonus in one is made |
 | `--gpx` | route-google-DATE-TIME-POINTSpts.gpx | Where to write the GPX file |
 
 ## Provably best route
@@ -368,7 +407,8 @@ With the 2026 bonus hours, it proves the same points as `planRoute.py` for
 make it slower, since it has to time every route.
 
 It takes the same options as `planRoute.py`, including gas stops, slow
-zones and bonus hours, except `--front-load`; it only maximizes total points.
+zones, bonus hours and combos, except `--front-load`; it only maximizes total
+points.
 
 The solver works in hundredths of a second and rounds driving times up to
 be safe, so it could rule out a route that fits with less than a second to

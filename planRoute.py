@@ -12,6 +12,8 @@ take its picture, a 10-minute gas stop every 175 miles (--gas-miles,
 CSV has the hours bonuses are open (from the rally book, see
 extractDatafromGPX.py), a bonus only counts while it's open, waiting there
 if you arrive early (--start sets the rally start, --ignore-hours skips it).
+Combo bonuses (bonus-combos.csv, also from the rally book) add their points
+when the route has every bonus in the combo (--ignore-combos skips them).
 
 Picking the best set of stops is the "orienteering problem", which has no
 fast exact solution, so this uses a heuristic: build a route by greedily
@@ -24,7 +26,7 @@ thorough rather than fast: expect several minutes.
 
     python planRoute.py bonus-lat-lon-points.csv --hours 10 --speed 45
 """
-import argparse, collections, csv, math, multiprocessing, os, sys, time
+import argparse, collections, csv, itertools, math, multiprocessing, os, sys, time
 import xml.etree.ElementTree as ET
 from datetime import datetime
 
@@ -134,6 +136,47 @@ def apply_first(planner, args):
                  f"with the drive back, more than the {planner.max_hours} hour budget")
 
 
+def load_combos(csv_file_path):
+    """[(code, points, [member codes])] from bonus-combos.csv, written by
+    extractDatafromGPX.py; empty if there's no such file."""
+    if not os.path.exists(csv_file_path):
+        return []
+    combos = []
+    with open(csv_file_path) as f:
+        for row in csv.reader(f):
+            if row:
+                combos.append((row[0].strip(), int(row[1]), row[2].split()))
+    return combos
+
+
+def add_combo_args(parser):
+    parser.add_argument('--combos', default='bonus-combos.csv',
+                        help='combo bonuses from the rally book: points for getting every bonus in a group '
+                             '(default bonus-combos.csv, if it exists)')
+    parser.add_argument('--ignore-combos', action='store_true', help='plan without the combo bonuses')
+
+
+def apply_combos(planner, args):
+    """Give the planner the combos it can score."""
+    if args.ignore_combos:
+        return
+    index = {place['code']: i for i, place in enumerate(planner.places) if i}
+    for code, points, members in load_combos(args.combos):
+        unknown = [m for m in members if m not in index]
+        if unknown:
+            print(f"WARNING: combo {code} needs {', '.join(unknown)}, not in the bonus file; it can't be scored",
+                  file=sys.stderr)
+            continue
+        planner.combos.append((code, points, frozenset(index[m] for m in members)))
+
+
+def describe_combos(planner):
+    if not planner.combos:
+        return "no combos"
+    return "combos: " + ", ".join(f"{code} {points} ({' '.join(planner.places[m]['code'] for m in sorted(members))})"
+                                  for code, points, members in planner.combos)
+
+
 def clock_hours(text):
     """'15:30' as 15.5."""
     hour, minute = map(int, text.split(':'))
@@ -223,6 +266,9 @@ class Planner:
         # Stops locked in at the start of every route (--first); the
         # search only changes what comes after them
         self.lead = []
+        # Combo bonuses, (code, points, frozenset of stops): the points count
+        # only if the route has every one of those stops (--combos)
+        self.combos = []
         # When each bonus opens and closes, in hours after the start, or None
         # if it's open all day. self.windows is None when no bonus has hours,
         # so routes are timed the quicker way.
@@ -318,7 +364,39 @@ class Planner:
 
     def route_points(self, route):
         points = self.points
-        return sum(points[i] for i in route)
+        total = sum(points[i] for i in route)
+        if self.combos:
+            stops = set(route)
+            total += sum(combo_points for _, combo_points, members in self.combos if members <= stops)
+        return total
+
+    def completing_points(self, route):
+        """Points per place for adding it to the route: its own, plus any
+        combo it would complete, being the last stop of one still missing."""
+        if not self.combos:
+            return self.points
+        points = list(self.points)
+        stops = set(route)
+        for _, combo_points, members in self.combos:
+            missing = members - stops
+            if len(missing) == 1:
+                points[next(iter(missing))] += combo_points
+        return points
+
+    def combo_seed(self, combos):
+        """A route through the --first stops and every stop of these combos,
+        each inserted where it adds the least time (farthest from HQ first),
+        or None if they can't all fit in the time budget."""
+        route = list(self.lead)
+        members = set().union(*(members for _, _, members in combos)) - set(route)
+        for b in sorted(members, key=lambda b: (-self.hours[0][b], b)):
+            options = [(self.route_hours(route[:k] + [b] + route[k:]), k) for k in range(len(self.lead), len(route) + 1)]
+            hours, k = min(options)
+            if hours > self.max_hours:
+                return None
+            route.insert(k, b)
+        route = self.two_opt(route)
+        return route if self.route_hours(route) <= self.max_hours else None
 
     def early_points(self, route):
         """Each bonus's points scaled by the fraction of the day left when you
@@ -377,6 +455,8 @@ class Planner:
         while True:
             best = None
             stops = [0] + route + [0]
+            # The last missing stop of a combo is worth the combo's points too
+            gain_points = self.completing_points(route)
             if windows is not None:
                 # With bonus hours, an insertion fits if every later stop can
                 # still make its hours and HQ by the end of the day. slack[k]
@@ -424,7 +504,7 @@ class Planner:
                         delay = photo + stop_hours + hours_into[b] + gas_delay - arrive[k + 1]
                         if delay - wait[k + 1] > slack[k + 1] or (b, k) in rejected:
                             continue
-                    points = all_points[b]
+                    points = gain_points[b]
                     if front_load:
                         # Credit for reaching b early, minus the delay it causes every later stop
                         gain = (points * (1 + front_load * (1 - photo / max_hours))
@@ -604,6 +684,13 @@ class Planner:
         lead = self.lead
         starts = [lead] + [lead + [b] for b in range(1, len(self.places))
                            if b not in lead and self.route_hours(lead + [b]) <= self.max_hours]
+        # Inserting one bonus at a time rarely builds a whole combo, so also
+        # start from every set of combos that fits, with all their stops
+        for size in range(1, len(self.combos) + 1):
+            for combos in itertools.combinations(self.combos, size):
+                seed = self.combo_seed(combos)
+                if seed is not None and seed not in starts:
+                    starts.append(seed)
         tasks = [(start, weight, max_drop) for start in starts for weight in weights]
         best, best_weight = [], weights[0]
         started = time.monotonic()
@@ -654,7 +741,7 @@ def _search_task(task):
     return _worker_planner.search_from(start, weight, max_drop), weight
 
 
-Leg = collections.namedtuple('Leg', 'place leg_miles miles arrive hours score gas wait')
+Leg = collections.namedtuple('Leg', 'place leg_miles miles arrive hours score gas wait combos')
 
 
 def time_of_day(planner, hours):
@@ -666,9 +753,11 @@ def time_of_day(planner, hours):
 def route_legs(planner, route):
     """Yield a Leg for HQ, each stop, then HQ. arrive is when you get there,
     wait is how long until it opens, hours is when you leave after its
-    picture, and gas is how many gas stops were made on the way there."""
+    picture, gas is how many gas stops were made on the way there, and
+    combos is [(code, points)] for each combo that stop completes."""
     stops = [0] + route + [0]
     miles = hours = score = 0
+    visited = set()
     for a, b in zip([None] + stops, stops):
         leg_miles = gas = 0
         if a is not None:
@@ -683,7 +772,12 @@ def route_legs(planner, route):
         if a is not None and b != 0:
             hours += planner.stop_hours
         score += planner.places[b]['points']
-        yield Leg(planner.places[b], leg_miles, miles, arrive, hours, score, gas, wait)
+        combos = []
+        if b and b not in visited:
+            visited.add(b)
+            combos = [(code, points) for code, points, members in planner.combos if b in members and members <= visited]
+            score += sum(points for _, points in combos)
+        yield Leg(planner.places[b], leg_miles, miles, arrive, hours, score, gas, wait, combos)
 
 
 def clock(seconds):
@@ -717,6 +811,7 @@ def write_gpx(planner, route, gpx_file_path):
         ET.SubElement(point, f'{{{GPX_NS}}}cmt').text = f"{place['points']} points"
         gas = f", {leg.gas} gas stop{'s' if leg.gas > 1 else ''} before" if leg.gas else ''
         wait = f", wait {leg.wait * 60:.0f} min for it to open at {place['opens']}" if leg.wait else ''
+        wait += ''.join(f", completes {code} combo (+{points})" for code, points in leg.combos)
         if n == 0:
             when = f"Start, {place['state']}, leave at hour 0 ({time_of_day(planner, 0)})"
         elif n > len(route):
@@ -757,6 +852,7 @@ def print_route(planner, route):
             notes.append(f"waits {leg.wait * 60:.0f} min to open at {leg.place['opens']}")
         elif leg.place.get('opens') and planner.windows:
             notes.append(f"open {leg.place['opens']}-{leg.place['closes']}")
+        notes += [f"completes {code} combo +{points}" for code, points in leg.combos]
         print(f"{n:>3}  {leg.place['code']:<24} {leg.place['state']:<5} {leg.place['points']:>6} "
               f"{leg.leg_miles:>7.1f} {leg.miles:>8.1f} {leg.hours:>6.2f} {time_of_day(planner, leg.arrive):>6} "
               f"{leg.score:>6}{'  ' + '; '.join(notes) if notes else ''}")
@@ -767,12 +863,21 @@ def print_route(planner, route):
           f"Gas stops: {planner.gas_stops(last.miles)}   Hours: {last.hours:.2f} of {planner.max_hours}")
     print(f"States: {len(set(places[i]['state'] for i in route))}   "
           f"Points per mile: {last.score / last.miles if last.miles else 0:.1f}")
+    if planner.combos:
+        done = [combo for leg in legs for combo in leg.combos]
+        stops = set(route)
+        partial = [f"{code} {len(members & stops)} of {len(members)}" for code, _, members in planner.combos
+                   if members & stops and not members <= stops]
+        print(f"Combos: " + (", ".join(f"{code} +{points}" for code, points in done) or "none")
+              + f" ({sum(points for _, points in done)} points)"
+              + (f"; partly visited, not scored: {', '.join(partial)}" if partial else ''))
 
     # How many points are already banked if the day is cut short
     banked = []
     for fraction in (0.25, 0.5, 0.75):
         cutoff = planner.max_hours * fraction
-        got = sum(leg.place['points'] for leg in legs if leg.arrive + leg.wait <= cutoff)
+        # Scores only go up along the route, combos counting when completed
+        got = max(leg.score for leg in legs if leg.arrive + leg.wait <= cutoff)
         banked.append(f"{got} ({got / last.score:.0%}) by hour {cutoff:g}" if last.score else f"0 by hour {cutoff:g}")
     print("Banked: " + ", ".join(banked))
 
@@ -802,6 +907,7 @@ def main():
     add_gas_args(parser)
     add_first_args(parser)
     add_hours_args(parser)
+    add_combo_args(parser)
     args = parser.parse_args()
 
     hq, bonuses = load_bonuses(args.csv_file)
@@ -809,12 +915,14 @@ def main():
     planner = Planner(hq, bonuses, args.hours, args.speed, args.stop_minutes, args.road_factor, args.front_load,
                       slow_zones, args.gas_miles, args.gas_minutes, args.start, not args.ignore_hours)
     apply_first(planner, args)
+    apply_combos(planner, args)
     route = planner.solve(START_WEIGHTS, args.max_drop, max(1, args.workers))
     print(f"{len(bonuses)} bonuses, {args.hours} hours at {args.speed} MPH, "
           f"{args.stop_minutes:g} min per stop, road factor {args.road_factor:g}, "
           f"front-load {args.front_load:g}")
     print(f"{describe_gas(args)}, {describe_slow_zones(slow_zones)}, {describe_first(planner)}")
-    print(f"{describe_hours(planner)}\n")
+    print(f"{describe_hours(planner)}")
+    print(f"{describe_combos(planner)}\n")
     print_route(planner, route)
     gpx = args.gpx or stamped_gpx_name('route', planner.route_points(route))
     write_gpx(planner, route, gpx)

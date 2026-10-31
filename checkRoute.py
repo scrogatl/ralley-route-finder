@@ -12,7 +12,8 @@ match Google's numbers, so the next plan can be closer to the real roads.
 Stops are counted the same way as planRoute.py: --stop-minutes at each bonus
 and --gas-minutes for every --gas-miles driven. Bonuses with hours (from the
 rally book, in bonus-lat-lon-points.csv) are waited for if reached before
-they open, and reported as missed if reached after they close.
+they open, and reported as missed if reached after they close. Combo
+bonuses (bonus-combos.csv) score when every bonus in one is made in time.
 
 Without --depart, the whole route goes in one request per 25 stops and the
 times have no traffic. With --depart, each leg is its own request, leaving
@@ -163,7 +164,7 @@ def gas_stops(miles, gas_miles):
     return int(miles // gas_miles) if gas_miles else 0
 
 
-Row = collections.namedtuple('Row', 'place leg_miles miles leg_hours arrive wait leave score gas missed')
+Row = collections.namedtuple('Row', 'place leg_miles miles leg_hours arrive wait leave score gas missed combos')
 
 
 def bonus_windows(csv_file_path, start):
@@ -179,11 +180,14 @@ def bonus_windows(csv_file_path, start):
             for b in bonuses if b.get('opens')}
 
 
-def timeline(places, legs, stop_hours, gas_miles, gas_hours, windows):
+def timeline(places, legs, stop_hours, gas_miles, gas_hours, windows, combos=()):
     """Yield a Row for HQ, each stop, then HQ. A bonus reached before it opens
-    is waited for; one reached after it closes is missed and scores nothing."""
+    is waited for; one reached after it closes is missed and scores nothing.
+    combos is [(code, points, member codes)]; each Row's combos are the
+    (code, points) that stop completes."""
     miles = hours = score = 0
-    yield Row(places[0], 0, 0, 0, 0, 0, 0, 0, 0, False)
+    scored = set()
+    yield Row(places[0], 0, 0, 0, 0, 0, 0, 0, 0, False, [])
     for n, (place, (leg_miles, leg_hours)) in enumerate(zip(places[1:], legs), 1):
         gas = gas_stops(miles + leg_miles, gas_miles) - gas_stops(miles, gas_miles)
         miles += leg_miles
@@ -196,9 +200,14 @@ def timeline(places, legs, stop_hours, gas_miles, gas_hours, windows):
         # No picture to take back at Rally HQ
         if n < len(places) - 1:
             hours += stop_hours
-        if not missed:
+        completed = []
+        if not missed and place['code'] not in scored:
             score += place['points']
-        yield Row(place, leg_miles, miles, leg_hours, arrive, wait, hours, score, gas, missed)
+            scored.add(place['code'])
+            completed = [(code, points) for code, points, members in combos
+                         if place['code'] in members and scored.issuperset(members)]
+            score += sum(points for _, points in completed)
+        yield Row(place, leg_miles, miles, leg_hours, arrive, wait, hours, score, gas, missed, completed)
 
 
 def write_gpx(rows, polylines, max_hours, source, gpx_file_path):
@@ -224,6 +233,7 @@ def write_gpx(rows, polylines, max_hours, source, gpx_file_path):
                 when += ", MISSED: closed before you'd get there"
             elif row.wait:
                 when += f", wait {row.wait * 60:.0f} min for it to open"
+            when += ''.join(f", completes {code} combo (+{points})" for code, points in row.combos)
         ET.SubElement(point, f'{{{GPX_NS}}}desc').text = when
 
     for n, row in enumerate(rows[:-1]):
@@ -265,6 +275,8 @@ def main():
     parser.add_argument('--start', default=planRoute.RALLY_START, type=planRoute.start_time,
                         help=f'rally start time, HH:MM, for bonus hours (default {planRoute.RALLY_START}, '
                              f'or the time of --depart)')
+    parser.add_argument('--combos', default='bonus-combos.csv',
+                        help='combo bonuses from the rally book (default bonus-combos.csv, if it exists)')
     planRoute.add_gas_args(parser)
     args = parser.parse_args()
 
@@ -283,7 +295,8 @@ def main():
     else:
         legs, polylines = fetch_batched(api_key, places)
         source = "Google, no traffic"
-    rows = list(timeline(places, legs, stop_hours, args.gas_miles, gas_hours, windows))
+    combos = planRoute.load_combos(args.combos)
+    rows = list(timeline(places, legs, stop_hours, args.gas_miles, gas_hours, windows, combos))
     begin = planRoute.clock_hours(start)
 
     def time_of_day(hours):
@@ -310,6 +323,7 @@ def main():
             notes.append(f"waits {row.wait * 60:.0f} min to open at {window[2]}")
         elif window:
             notes.append(f"open {window[2]}-{window[3]}")
+        notes += [f"completes {code} combo +{points}" for code, points in row.combos]
         print(f"{n:>3}  {place['code']:<24} {place['state']:<5} {place['points']:>6} {straight:>7.1f} "
               f"{row.leg_miles:>7.1f} {row.miles:>8.1f} {row.leg_hours * 60:>4.0f} m {row.arrive:>6.2f} "
               f"{row.leave:>6.2f} {time_of_day(row.arrive):>6} {row.score:>6}{'  ' + '; '.join(notes) if notes else ''}")
@@ -326,6 +340,14 @@ def main():
         print(f"MISSED HOURS: " + ", ".join(f"{row.place['code']} (arrive {time_of_day(row.arrive)}, "
                                              f"closes {windows[row.place['code']][3]})" for row in missed)
               + f"; {lost} points not counted")
+    if combos:
+        done = [combo for row in rows for combo in row.combos]
+        planned = {p['code'] for p in places}
+        # Combos the plan had every bonus of, lost to a missed bonus
+        lost = [code for code, _, members in combos
+                if planned.issuperset(members) and code not in {c for c, _ in done}]
+        print("Combos: " + (", ".join(f"{code} +{points}" for code, points in done) or "none")
+              + (f"; LOST to missed hours: {', '.join(lost)}" if lost else ''))
     if hours <= args.hours:
         print(f"FITS: back at Rally HQ with {(args.hours - hours) * 60:.0f} minutes to spare")
     else:
