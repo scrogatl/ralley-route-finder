@@ -47,7 +47,8 @@ book) live in their own folder, e.g. `SNAFU_2026/`.
 2. ### Plan the route
 
     Finds a high-scoring route from the file made in step 1, using
-    straight-line distances, and writes it to `route.gpx`. It's free: no
+    straight-line distances, and writes it to a GPX file named with the
+    date, time and points, e.g. `route-20261031-143005-11103pts.gpx`. It's free: no
     Google API calls. See [Planning the route](#planning-the-route) for the
     options.
 
@@ -57,7 +58,7 @@ book) live in their own folder, e.g. `SNAFU_2026/`.
 
 3. ### Check the route on real roads with Google Maps
 
-    Sends the stops in `route.gpx` to the Google Maps Routes API, in
+    Sends the stops in the newest route GPX file to the Google Maps Routes API, in
     order, and shows the real road miles and driving times, and whether the
     day still fits. It is normally inside Google's free monthly usage. See
     [Checking the route with Google Maps](#checking-the-route-with-google-maps).
@@ -84,8 +85,10 @@ miles) is slowed to 25 MPH. The
 route starts and ends at Rally HQ and fits in the time budget. It prints each
 stop in order with leg miles, running hours and running score.
 
-It also writes the route as a GPX file (`route.gpx` unless `--gpx` names
-another) for Garmin BaseCamp and GPS units. The file has a waypoint for each
+It also writes the route as a GPX file for Garmin BaseCamp and GPS units,
+named with when it was made and the route's points, e.g.
+`route-20261031-143005-11103pts.gpx` (or the name given with `--gpx`), so a
+new run never overwrites an earlier one. The file has a waypoint for each
 stop and a route through them in order, from Rally HQ back to Rally HQ. Each
 point's comment holds its point value, and its description gives the stop
 number, state and planned time.
@@ -123,8 +126,9 @@ PyPy.
 | `--no-slow-zone` | | Turn off the default Atlanta slow zone |
 | `--max-drop` | 6 | Longest run of stops the search tries removing at once; higher is slower |
 | `--front-load` | 0 | Favor collecting points early, in case the day is cut short (see below) |
+| `--first` | none | Start with these bonuses, in this order, e.g. `CGSH,SMCH` (see below) |
 | `--workers` | all cores | How many CPU cores to search with |
-| `--gpx` | route.gpx | Where to write the GPX file |
+| `--gpx` | route-DATE-TIME-POINTSpts.gpx | Where to write the GPX file |
 
 ### Front-loading points
 
@@ -142,6 +146,25 @@ you arrive):
 The output ends with a `Banked:` line showing the points collected by a
 quarter, half and three quarters of the way through the day. Compare that
 line across a few `--front-load` values to choose one.
+
+### Choosing the first stops
+
+`--first` makes the route start with the bonuses you name, in the order you
+give them, and the search plans the rest of the day after them. It's for
+trying out other routes, such as heading straight for the big bonuses:
+
+```bash
+python planRoute.py --first CGSH,SMCH
+```
+
+Codes can be upper or lower case. It stops with an error if a code isn't in
+the bonus file or if those stops alone, with the drive back to Rally HQ,
+don't fit in the time budget. `planRouteExact.py` takes it too.
+
+Compare the `Banked:` line and total with a run without `--first`. On the
+2026 map, starting with CGSH and SMCH scores about 1,100 points less and
+banks less at every hour, because the normal route collects bonuses along the
+way and still reaches those two by hour 4.
 
 ### How the search works
 
@@ -204,13 +227,14 @@ collects its points sooner; then the one that takes less time.
 
 `planRoute.py` and `planRouteExact.py` only estimate distances, as straight
 lines. `checkRoute.py` asks the Google Maps Routes API for the real
-driving route through the stops in a GPX file they wrote (`route.gpx` by
-default; pass `route-exact.gpx` to check that one), keeping the same order.
+driving route through the stops in a GPX file they wrote, keeping the same
+order. With no file named, it checks the newest `route*.gpx` in the folder
+(from either planner) and prints which one.
 
 ```bash
-python checkRoute.py                                   # route.gpx, no traffic
+python checkRoute.py                                   # newest route, no traffic
 python checkRoute.py --depart "2026-11-07 07:00"       # with traffic forecast
-python checkRoute.py route-exact.gpx --hours 9.5
+python checkRoute.py route-exact-20261031-143005-11103pts.gpx --hours 9.5
 ```
 
 It prints, for each stop:
@@ -229,8 +253,8 @@ zone on, the plan also slows Atlanta driving on top of that speed, so plan
 with `--no-slow-zone` too if you use the suggested speed for a route that
 goes through Atlanta.
 
-It also writes `route-google.gpx`: the same waypoints and route as
-`route.gpx` with Google's times in each description, plus a track along the
+It also writes `route-google-DATE-TIME-POINTSpts.gpx`: the same waypoints and
+route as the file it checked, with Google's times in each description, plus a track along the
 roads Google chose, for BaseCamp and GPS units.
 
 **Traffic.** Without `--depart` the whole route goes in one request (one per
@@ -255,12 +279,12 @@ for current numbers.
 | `--stop-minutes` | 5 | Time at each bonus to take its picture |
 | `--gas-miles` | 175 | Stop for gas each time the route passes another this many miles; 0 for none |
 | `--gas-minutes` | 10 | Time for each gas stop |
-| `--gpx` | route-google.gpx | Where to write the GPX file |
+| `--gpx` | route-google-DATE-TIME-POINTSpts.gpx | Where to write the GPX file |
 
 ## Provably best route
 
 `planRouteExact.py` uses the same assumptions and prints the same table and
-GPX file (`route-exact.gpx` by default), but solves the problem exactly with
+GPX file (named `route-exact-DATE-TIME-POINTSpts.gpx` by default), but solves the problem exactly with
 Google's free [OR-Tools](https://developers.google.com/optimization) CP-SAT
 solver. It runs locally, with no Google API calls and no cost.
 

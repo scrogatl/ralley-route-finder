@@ -59,6 +59,12 @@ def solve_exact(planner, time_limit, workers, hint):
         arcs.append((nodes.index(b), nodes.index(b), visit[b].Not()))
     # One loop through HQ and the visited bonuses, each visited at most once
     model.AddCircuit(arcs)
+    # --first stops: the route starts with these legs, in this order
+    for a, b in zip([0] + planner.lead, planner.lead):
+        if (a, b) not in arc_vars:
+            sys.exit(f"ERROR: the leg {places[a]['code']} to {places[b]['code']} was left out as too long; "
+                     f"try fewer --first stops")
+        model.Add(arc_vars[a, b] == 1)
     # Gas stops: at least one for each full gas_miles driven
     # (gas * interval > miles - interval, i.e. gas >= floor(miles / interval))
     gas = model.NewIntVar(0, 1000, 'gas_stops')
@@ -109,16 +115,19 @@ def main():
                         help='stop after this many seconds and report the best route so far (default 600)')
     parser.add_argument('--workers', type=int, default=os.cpu_count(),
                         help=f'CPU cores to solve with (default all, {os.cpu_count()} here)')
-    parser.add_argument('--gpx', default='route-exact.gpx',
-                        help='also write the route as GPX for Garmin BaseCamp and GPS units (default route-exact.gpx)')
+    parser.add_argument('--gpx',
+                        help='also write the route as GPX for Garmin BaseCamp and GPS units '
+                             '(default route-exact-DATE-TIME-POINTSpts.gpx)')
     planRoute.add_slow_zone_args(parser)
     planRoute.add_gas_args(parser)
+    planRoute.add_first_args(parser)
     args = parser.parse_args()
 
     hq, bonuses = planRoute.load_bonuses(args.csv_file)
     slow_zones = planRoute.slow_zones_from_args(args)
     planner = planRoute.Planner(hq, bonuses, args.hours, args.speed, args.stop_minutes, args.road_factor, 0,
                                 slow_zones, args.gas_miles, args.gas_minutes)
+    planRoute.apply_first(planner, args)
     # Start from planRoute.py's full search, so this never reports a worse route
     hint = planner.solve(planRoute.START_WEIGHTS, 6, max(1, args.workers))
     print(f"Solving: starting from a {planner.route_points(hint)}-point route, "
@@ -127,13 +136,16 @@ def main():
     route, status, bound, seconds = solve_exact(planner, args.time_limit, max(1, args.workers), hint)
 
     # Check the answer independently of the solver
-    if len(set(route)) != len(route) or planner.route_hours(route) > planner.max_hours + 1e-9:
-        sys.exit("ERROR: solver returned an invalid route (repeated bonus or over time); this is a bug")
+    if (len(set(route)) != len(route) or planner.route_hours(route) > planner.max_hours + 1e-9
+            or route[:len(planner.lead)] != planner.lead):
+        sys.exit("ERROR: solver returned an invalid route (repeated bonus, over time or --first stops "
+                 "moved); this is a bug")
 
     points = planner.route_points(route)
     print(f"{len(bonuses)} bonuses, {args.hours} hours at {args.speed} MPH, "
           f"{args.stop_minutes:g} min per stop, road factor {args.road_factor:g}")
-    print(f"{planRoute.describe_gas(args)}, {planRoute.describe_slow_zones(slow_zones)}\n")
+    print(f"{planRoute.describe_gas(args)}, {planRoute.describe_slow_zones(slow_zones)}, "
+          f"{planRoute.describe_first(planner)}\n")
     planRoute.print_route(planner, route)
     print()
     if status == 'OPTIMAL':
@@ -143,8 +155,9 @@ def main():
         gap = (bound - points) / bound if bound else 0
         print(f"NOT PROVEN: best found {points} points; the best possible is at most {bound} "
               f"({gap:.1%} higher). Stopped at the {args.time_limit:g} s limit; raise --time-limit to keep going")
-    planRoute.write_gpx(planner, route, args.gpx)
-    print(f"\nGPX written to {args.gpx}")
+    gpx = args.gpx or planRoute.stamped_gpx_name('route-exact', points)
+    planRoute.write_gpx(planner, route, gpx)
+    print(f"\nGPX written to {gpx}")
 
 
 if __name__ == "__main__":

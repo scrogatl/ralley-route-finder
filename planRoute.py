@@ -23,6 +23,7 @@ thorough rather than fast: expect several minutes.
 """
 import argparse, collections, csv, math, multiprocessing, os, sys
 import xml.etree.ElementTree as ET
+from datetime import datetime
 
 EARTH_RADIUS_MILES = 3958.8
 GPX_NS = "http://www.topografix.com/GPX/1/1"
@@ -100,6 +101,35 @@ def slow_zones_from_args(args):
     return args.slow_zone or [ATLANTA_SLOW_ZONE]
 
 
+def add_first_args(parser):
+    parser.add_argument('--first', metavar='CODES',
+                        help='start the route with these bonuses, in this order, e.g. CGSH,SMCH; '
+                             'the search plans the rest of the day after them')
+
+
+def apply_first(planner, args):
+    """Lock in the --first stops at the start of the planner's route."""
+    if not args.first:
+        return
+    index = {place['code'].upper(): i for i, place in enumerate(planner.places) if i}
+    codes = [code.strip().upper() for code in args.first.split(',') if code.strip()]
+    unknown = [code for code in codes if code not in index]
+    if unknown:
+        sys.exit(f"ERROR: --first: no bonus with code {', '.join(unknown)}")
+    if len(set(codes)) != len(codes):
+        sys.exit("ERROR: --first names a bonus more than once")
+    planner.lead = [index[code] for code in codes]
+    if planner.route_hours(planner.lead) > planner.max_hours:
+        sys.exit(f"ERROR: --first {', '.join(codes)} takes {planner.route_hours(planner.lead):.2f} hours "
+                 f"with the drive back, more than the {planner.max_hours} hour budget")
+
+
+def describe_first(planner):
+    if not planner.lead:
+        return "no forced first stops"
+    return "first: " + ", ".join(planner.places[b]['code'] for b in planner.lead)
+
+
 def describe_slow_zones(zones):
     if not zones:
         return "no slow zones"
@@ -148,6 +178,9 @@ class Planner:
         self.hours_to = [list(column) for column in zip(*self.hours)]
         self.miles_to = [list(column) for column in zip(*self.miles)]
         self.points = [place['points'] for place in self.places]
+        # Stops locked in at the start of every route (--first); the
+        # search only changes what comes after them
+        self.lead = []
 
     @staticmethod
     def leg_hours(a, b, miles, speed, slow_zones):
@@ -213,6 +246,9 @@ class Planner:
     def orient(self, route):
         """Driving a loop backwards takes the same time, so pick the direction
         that collects points sooner."""
+        if self.lead:
+            # Reversing would move the --first stops to the end
+            return route
         backwards = route[::-1]
         return backwards if self.early_points(backwards) > self.early_points(route) else route
 
@@ -241,7 +277,7 @@ class Planner:
                     depart.append(depart[-1] + hours[stops[k - 1]][stops[k]] + stop_hours)
                 later_points = [sum(all_points[s] for s in stops[k + 1:]) for k in range(len(stops) - 1)]
             gas_now = int(used_miles // gas_miles) if gas_miles else 0
-            for k in range(len(stops) - 1):
+            for k in range(len(self.lead), len(stops) - 1):
                 a, c = stops[k], stops[k + 1]
                 hours_from, miles_from, hours_into, miles_into = hours[a], miles[a], hours_to[c], miles_to[c]
                 hours_ac, miles_ac = hours[a][c], miles[a][c]
@@ -283,7 +319,7 @@ class Planner:
         while improved:
             improved = False
             stops = [0] + route + [0]
-            for i in range(1, len(stops) - 2):
+            for i in range(1 + len(self.lead), len(stops) - 2):
                 for j in range(i + 1, len(stops) - 1):
                     a, b, c, d = stops[i - 1], stops[i], stops[j], stops[j + 1]
                     # A slow zone can make a quicker leg longer in miles, so
@@ -305,7 +341,7 @@ class Planner:
         while improved:
             improved = False
             value, hours = self.route_value(route), self.route_hours(route)
-            for i in range(len(route)):
+            for i in range(len(self.lead), len(route)):
                 for j in range(i + 1, len(route)):
                     candidate = route[:i] + route[i:j + 1][::-1] + route[j + 1:]
                     c_value, c_hours = self.route_value(candidate), self.route_hours(candidate)
@@ -328,12 +364,12 @@ class Planner:
         while improved:
             improved = False
             score = self.early_points(route)
-            n = len(route)
-            moves = [route[:i] + route[i:j + 1][::-1] + route[j + 1:] for i in range(n) for j in range(i + 1, n)]
+            n, first = len(route), len(self.lead)
+            moves = [route[:i] + route[i:j + 1][::-1] + route[j + 1:] for i in range(first, n) for j in range(i + 1, n)]
             # Take stop i out, then put it back at position j of what's left
-            for i in range(n):
+            for i in range(first, n):
                 rest = route[:i] + route[i + 1:]
-                moves += [rest[:j] + [route[i]] + rest[j:] for j in range(n) if j != i]
+                moves += [rest[:j] + [route[i]] + rest[j:] for j in range(first, n) if j != i]
             for candidate in moves:
                 if self.early_points(candidate) > score + 1e-9 and self.route_hours(candidate) <= self.max_hours:
                     route = candidate
@@ -359,7 +395,7 @@ class Planner:
         while improved:
             improved = False
             for length in range(1, max_drop + 1):
-                for start in range(len(route) - length + 1):
+                for start in range(len(self.lead), len(route) - length + 1):
                     candidate = self.improve(route[:start] + route[start + length:], weight)
                     if self.better(candidate, route):
                         route = candidate
@@ -376,13 +412,13 @@ class Planner:
         while improved:
             improved = False
             unvisited = [b for b in range(1, len(self.places)) if b not in route]
-            for i in range(len(route)):
+            for i in range(len(self.lead), len(route)):
                 base = route[:i] + route[i + 1:]
                 stops = [0] + base + [0]
                 for b in unvisited:
                     _, pos = min((self.hours[stops[k]][b] + self.hours[b][stops[k + 1]]
                                   - self.hours[stops[k]][stops[k + 1]], k)
-                                 for k in range(len(stops) - 1))
+                                 for k in range(len(self.lead), len(stops) - 1))
                     candidate = base[:pos] + [b] + base[pos:]
                     if self.route_hours(candidate) > self.max_hours:
                         continue
@@ -402,7 +438,10 @@ class Planner:
         # Start once from an empty route, then once from each bonus on its own,
         # so every bonus gets a chance to anchor the route. Skip bonuses too far
         # for a round trip, since nothing later would drop them from the route.
-        starts = [[]] + [[b] for b in range(1, len(self.places)) if self.route_hours([b]) <= self.max_hours]
+        # Any --first stops come before all of that.
+        lead = self.lead
+        starts = [lead] + [lead + [b] for b in range(1, len(self.places))
+                           if b not in lead and self.route_hours(lead + [b]) <= self.max_hours]
         tasks = [(start, weight, max_drop) for start in starts for weight in weights]
         best, best_weight = [], weights[0]
         with multiprocessing.Pool(workers, initializer=_init_worker, initargs=(self,)) as pool:
@@ -423,8 +462,10 @@ class Planner:
             best = route
         # Last, since the searches above reorder stops for shortest driving
         best = self.front_load_order(best)
-        if len(set(best)) != len(best) or self.route_hours(best) > self.max_hours + 1e-9:
-            sys.exit("ERROR: planner produced an invalid route (repeated bonus or over time); this is a bug")
+        if (len(set(best)) != len(best) or self.route_hours(best) > self.max_hours + 1e-9
+                or best[:len(lead)] != lead):
+            sys.exit("ERROR: planner produced an invalid route (repeated bonus, over time or --first stops "
+                     "moved); this is a bug")
         return best
 
 
@@ -463,6 +504,12 @@ def route_legs(planner, route):
             hours += planner.stop_hours
         score += planner.places[b]['points']
         yield Leg(planner.places[b], leg_miles, miles, arrive, hours, score, gas)
+
+
+def stamped_gpx_name(prefix, points):
+    """A GPX file name with when it was made and the route's points, e.g.
+    route-20261031-143005-11103pts.gpx, so one run never overwrites another."""
+    return f"{prefix}-{datetime.now():%Y%m%d-%H%M%S}-{points}pts.gpx"
 
 
 def write_gpx(planner, route, gpx_file_path):
@@ -545,24 +592,28 @@ def main():
                              '(default 0)')
     parser.add_argument('--workers', type=int, default=os.cpu_count(),
                         help=f'CPU cores to search with (default all, {os.cpu_count()} here)')
-    parser.add_argument('--gpx', default='route.gpx',
-                        help='also write the route as GPX for Garmin BaseCamp and GPS units (default route.gpx)')
+    parser.add_argument('--gpx',
+                        help='also write the route as GPX for Garmin BaseCamp and GPS units '
+                             '(default route-DATE-TIME-POINTSpts.gpx)')
     add_slow_zone_args(parser)
     add_gas_args(parser)
+    add_first_args(parser)
     args = parser.parse_args()
 
     hq, bonuses = load_bonuses(args.csv_file)
     slow_zones = slow_zones_from_args(args)
     planner = Planner(hq, bonuses, args.hours, args.speed, args.stop_minutes, args.road_factor, args.front_load,
                       slow_zones, args.gas_miles, args.gas_minutes)
+    apply_first(planner, args)
     route = planner.solve(START_WEIGHTS, args.max_drop, max(1, args.workers))
     print(f"{len(bonuses)} bonuses, {args.hours} hours at {args.speed} MPH, "
           f"{args.stop_minutes:g} min per stop, road factor {args.road_factor:g}, "
           f"front-load {args.front_load:g}")
-    print(f"{describe_gas(args)}, {describe_slow_zones(slow_zones)}\n")
+    print(f"{describe_gas(args)}, {describe_slow_zones(slow_zones)}, {describe_first(planner)}\n")
     print_route(planner, route)
-    write_gpx(planner, route, args.gpx)
-    print(f"\nGPX written to {args.gpx}")
+    gpx = args.gpx or stamped_gpx_name('route', planner.route_points(route))
+    write_gpx(planner, route, gpx)
+    print(f"\nGPX written to {gpx}")
 
 
 if __name__ == "__main__":

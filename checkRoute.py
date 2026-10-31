@@ -3,7 +3,7 @@
 Check a planned route against real roads with the Google Maps Routes API.
 
 Reads the route from a GPX file written by planRoute.py or planRouteExact.py
-(route.gpx by default), asks Google for driving directions through the stops
+(the newest one by default), asks Google for driving directions through the stops
 in that order, and prints each leg's road miles and driving time, when you'd
 arrive at and leave each stop, and whether the day still fits in the time
 budget. It also prints a --road-factor and --speed for planRoute.py that
@@ -19,9 +19,9 @@ when you'd leave that stop, and the times include Google's traffic forecast.
 Needs GMAPS_API_KEY in the environment, for a Google Cloud project with the
 Routes API turned on. A check is usually inside Google's free monthly usage.
 
-    python checkRoute.py route.gpx --depart "2026-11-07 07:00"
+    python checkRoute.py --depart "2026-11-07 07:00"
 """
-import argparse, os, sys
+import argparse, glob, os, sys
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 import requests
@@ -34,6 +34,15 @@ ROUTES_URL = 'https://routes.googleapis.com/directions/v2:computeRoutes'
 FIELD_MASK = 'routes.legs.distanceMeters,routes.legs.duration,routes.polyline.encodedPolyline'
 # Google takes up to 25 stops between the start and end of one request
 MAX_WAYPOINTS = 25
+
+
+def newest_route():
+    """The most recent GPX file from planRoute.py or planRouteExact.py in
+    this folder (not one this script wrote)."""
+    files = [f for f in glob.glob('route*.gpx') if not f.startswith('route-google')]
+    if not files:
+        sys.exit("ERROR: no route*.gpx file here; make one with planRoute.py, or name the GPX file to check")
+    return max(files, key=os.path.getmtime)
 
 
 def load_route(gpx_file_path):
@@ -207,7 +216,7 @@ def write_gpx(rows, polylines, max_hours, source, gpx_file_path):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('gpx_file', nargs='?', default='route.gpx')
+    parser.add_argument('gpx_file', nargs='?', help='GPX file to check (default the newest route*.gpx here)')
     parser.add_argument('--hours', type=float, default=9.5, help='time budget in hours (default 9.5)')
     parser.add_argument('--stop-minutes', type=float, default=5,
                         help='time spent at each bonus taking its picture (default 5)')
@@ -215,11 +224,13 @@ def main():
                         help='when you leave Rally HQ, e.g. "2026-11-07 07:00" (your computer\'s time zone '
                              'unless you add one, e.g. "2026-11-07 07:00-05:00"); uses Google\'s traffic forecast. '
                              'Without it, times have no traffic')
-    parser.add_argument('--gpx', default='route-google.gpx',
-                        help='write the route with Google\'s times and roads as GPX (default route-google.gpx)')
+    parser.add_argument('--gpx',
+                        help='write the route with Google\'s times and roads as GPX '
+                             '(default route-google-DATE-TIME-POINTSpts.gpx)')
     planRoute.add_gas_args(parser)
     args = parser.parse_args()
 
+    args.gpx_file = args.gpx_file or newest_route()
     places = load_route(args.gpx_file)
     stop_hours, gas_hours = args.stop_minutes / 60, args.gas_minutes / 60
     if args.depart and args.depart.timestamp() < datetime.now().timestamp():
@@ -235,7 +246,7 @@ def main():
 
     print(f"{args.gpx_file}: {len(places) - 2} bonuses, {source}")
     print(f"{args.stop_minutes:g} min per stop, {planRoute.describe_gas(args)}\n")
-    print(f"{'#':>3}  {'Bonus':<24} {'State':<5} {'Points':>6} {'Line mi':>7} {'Road mi':>7} {'Drive':>6} "
+    print(f"{'#':>3}  {'Bonus':<24} {'State':<5} {'Points':>6} {'Line mi':>7} {'Road mi':>7} {'Total mi':>8} {'Drive':>6} "
           f"{'Arrive':>6} {'Leave':>6} {'Score':>6}")
     line_miles = 0
     for n, (place, leg_miles, miles, leg_hours, arrive, leave, score, gas) in enumerate(rows):
@@ -243,7 +254,7 @@ def main():
         line_miles += straight
         gas = f"  + {gas} gas stop{'s' if gas > 1 else ''} on the way" if gas else ''
         print(f"{n:>3}  {place['code']:<24} {place['state']:<5} {place['points']:>6} {straight:>7.1f} "
-              f"{leg_miles:>7.1f} {leg_hours * 60:>4.0f} m {arrive:>6.2f} {leave:>6.2f} {score:>6}{gas}")
+              f"{leg_miles:>7.1f} {miles:>8.1f} {leg_hours * 60:>4.0f} m {arrive:>6.2f} {leave:>6.2f} {score:>6}{gas}")
 
     last = rows[-1]
     miles, hours, points = last[2], last[4], last[6]
@@ -260,8 +271,9 @@ def main():
     if line_miles and drive_hours:
         print(f"To plan closer to these roads: planRoute.py --road-factor {miles / line_miles:.2f} "
               f"--speed {miles / drive_hours:.0f}")
-    write_gpx(rows, polylines, args.hours, source, args.gpx)
-    print(f"\nGPX written to {args.gpx}")
+    gpx = args.gpx or planRoute.stamped_gpx_name('route-google', points)
+    write_gpx(rows, polylines, args.hours, source, gpx)
+    print(f"\nGPX written to {gpx}")
 
 
 if __name__ == "__main__":
