@@ -15,12 +15,55 @@ could still be.
 
     python planRouteExact.py bonus-lat-lon-points.csv --hours 10 --speed 45
 """
-import argparse, os, sys
+import argparse, os, sys, threading, time
 from ortools.sat.python import cp_model
 import planRoute
 
 # The solver needs whole numbers, so times are in seconds
 SECONDS_PER_HOUR = 3600
+
+
+class Progress(cp_model.CpSolverSolutionCallback):
+    """Show the best route found and the most any route could score while
+    the solver runs, updated every few seconds."""
+
+    def __init__(self, time_limit):
+        super().__init__()
+        self.time_limit = time_limit
+        self.found = self.bound = None
+        self.started = time.monotonic()
+        self.done = threading.Event()
+        self.thread = threading.Thread(target=self.show_every, args=(5,), daemon=True)
+
+    def on_solution_callback(self):
+        self.found = int(self.ObjectiveValue())
+
+    def on_bound(self, bound):
+        self.bound = int(bound)
+
+    def show(self):
+        found = f"best found {self.found} points" if self.found is not None else "no route yet"
+        if self.bound is None:
+            possible = "working out the most possible"
+        else:
+            gap = (self.bound - self.found) / self.bound if self.found is not None and self.bound else 0
+            possible = f"most possible {self.bound} ({gap:.1%} higher)"
+        planRoute.progress(f"Solving: {planRoute.clock(time.monotonic() - self.started)} of "
+                           f"{planRoute.clock(self.time_limit)}, {found}, {possible}")
+
+    def show_every(self, seconds):
+        while not self.done.wait(seconds):
+            self.show()
+
+    def __enter__(self):
+        self.thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self.done.set()
+        self.thread.join()
+        self.show()
+        print(file=sys.stderr)
 
 
 def solve_exact(planner, time_limit, workers, hint):
@@ -116,7 +159,9 @@ def solve_exact(planner, time_limit, workers, hint):
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = time_limit
     solver.parameters.num_workers = workers
-    status = solver.Solve(model)
+    with Progress(time_limit) as progress:
+        solver.best_bound_callback = progress.on_bound
+        status = solver.Solve(model, progress)
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         sys.exit(f"ERROR: solver found no route ({solver.StatusName(status)})")
 

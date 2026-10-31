@@ -21,7 +21,7 @@ thorough rather than fast: expect several minutes.
 
     python planRoute.py bonus-lat-lon-points.csv --hours 10 --speed 45
 """
-import argparse, collections, csv, math, multiprocessing, os, sys
+import argparse, collections, csv, math, multiprocessing, os, sys, time
 import xml.etree.ElementTree as ET
 from datetime import datetime
 
@@ -444,24 +444,33 @@ class Planner:
                            if b not in lead and self.route_hours(lead + [b]) <= self.max_hours]
         tasks = [(start, weight, max_drop) for start in starts for weight in weights]
         best, best_weight = [], weights[0]
+        started = time.monotonic()
         with multiprocessing.Pool(workers, initializer=_init_worker, initargs=(self,)) as pool:
             # imap returns results in task order, so the winner is the same
             # however many workers there are
             for n, (route, weight) in enumerate(pool.imap(_search_task, tasks), 1):
                 if self.better(route, best):
                     best, best_weight = route, weight
-                print(f"\rSearching: {n} of {len(tasks)} starts, best so far {self.route_points(best)} points",
-                      end='', file=sys.stderr, flush=True)
-        print(file=sys.stderr)
+                elapsed = time.monotonic() - started
+                progress(f"Searching: {n} of {len(tasks)} starts ({n / len(tasks):.0%}), "
+                         f"best so far {self.route_points(best)} points, {clock(elapsed)} elapsed, "
+                         f"about {clock(elapsed / n * (len(tasks) - n))} left")
 
         # Polish the winner, alternating swaps and drops until neither helps
+        polish = 1
         while True:
+            progress(f"Polishing: pass {polish}, best so far {self.route_points(best)} points, "
+                     f"{clock(time.monotonic() - started)} elapsed")
             route = self.local_search(self.swap_search(best, best_weight), best_weight, max_drop)
             if not self.better(route, best):
                 break
             best = route
+            polish += 1
         # Last, since the searches above reorder stops for shortest driving
+        progress(f"Ordering stops to bank points early, {clock(time.monotonic() - started)} elapsed")
         best = self.front_load_order(best)
+        progress(f"Search done: {self.route_points(best)} points in {clock(time.monotonic() - started)}")
+        print(file=sys.stderr)
         if (len(set(best)) != len(best) or self.route_hours(best) > self.max_hours + 1e-9
                 or best[:len(lead)] != lead):
             sys.exit("ERROR: planner produced an invalid route (repeated bonus, over time or --first stops "
@@ -504,6 +513,18 @@ def route_legs(planner, route):
             hours += planner.stop_hours
         score += planner.places[b]['points']
         yield Leg(planner.places[b], leg_miles, miles, arrive, hours, score, gas)
+
+
+def clock(seconds):
+    """Seconds as m:ss, or h:mm:ss from an hour up, for progress lines."""
+    minutes, seconds = divmod(int(seconds), 60)
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}:{minutes:02}:{seconds:02}" if hours else f"{minutes}:{seconds:02}"
+
+
+def progress(text):
+    """Rewrite the progress line on stderr; the padding clears a longer old line."""
+    print(f"\r{text:<100}", end='', file=sys.stderr, flush=True)
 
 
 def stamped_gpx_name(prefix, points):

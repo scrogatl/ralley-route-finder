@@ -293,7 +293,8 @@ python planRouteExact.py                       # reads bonus-lat-lon-points.csv
 python planRouteExact.py --hours 8 --time-limit 1800
 ```
 
-It ends with one of:
+While it runs, it shows the best route found so far and the most any route
+could still score, updated every 5 seconds. It ends with one of:
 
 - `PROVEN OPTIMAL`: no route scores more under these assumptions.
 - `NOT PROVEN`: it hit `--time-limit` (600 seconds by default) first. It
