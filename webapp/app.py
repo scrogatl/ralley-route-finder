@@ -273,7 +273,13 @@ def show_run(run_id):
     bonuses = []
     if run['status'] == 'done' and os.path.exists(BONUS_CSV):
         _, bonuses = planRoute.load_bonuses(BONUS_CSV)
+    # Neighbours in the scenario list's order, newest first
+    ids = [r['id'] for r in all_runs()]
+    at = ids.index(run_id) if run_id in ids else 0
+    newer = ids[at - 1] if at > 0 else None
+    older = ids[at + 1] if at + 1 < len(ids) else None
     return render_template('run.html', run=run, state=run_state(run), describe=describe,
+                           newer=newer, older=older, position=at + 1, total=len(ids),
                            bonuses=[dict(code=b['code'], lat=b['lat'], lon=b['lon'], points=b['points'])
                                     for b in bonuses])
 

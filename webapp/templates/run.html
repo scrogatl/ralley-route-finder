@@ -8,7 +8,23 @@
 {% endblock %}
 {% block main %}
 <section class="card">
-  <p class="back"><a href="{{ url_for('index') }}">← All scenarios</a></p>
+  <div class="topbar">
+    <p class="back"><a href="{{ url_for('index') }}">← All scenarios</a></p>
+    <nav class="pager" aria-label="Other scenarios">
+      {% if newer %}<a id="newer" class="button secondary" href="{{ url_for('show_run', run_id=newer) }}" title="Newer scenario (← key)">←</a>
+      {% else %}<span class="button secondary disabled" aria-hidden="true">←</span>{% endif %}
+      <span class="muted">{{ position }} of {{ total }}</span>
+      {% if older %}<a id="older" class="button secondary" href="{{ url_for('show_run', run_id=older) }}" title="Older scenario (→ key)">→</a>
+      {% else %}<span class="button secondary disabled" aria-hidden="true">→</span>{% endif %}
+    </nav>
+  </div>
+  <script>
+    document.addEventListener('keydown', e => {
+      if (e.altKey || e.ctrlKey || e.metaKey || e.target.closest('input, textarea, select, .leaflet-container')) return;
+      const link = document.getElementById({ArrowLeft: 'newer', ArrowRight: 'older'}[e.key]);
+      if (link) location.href = link.href;
+    });
+  </script>
   <h1>{% if run.name %}{{ run.name }}: {% endif %}{% if run.status == 'done' %}{{ '{:,}'.format(run.points) }} points{% else %}Planning{% endif %}</h1>
   <p class="muted">{{ describe(run.settings) }}</p>
 
