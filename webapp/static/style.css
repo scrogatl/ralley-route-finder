@@ -95,6 +95,7 @@ table.sortable th::after { content: " ↕"; opacity: .35; }
 table.sortable th[aria-sort=ascending]::after { content: " ▲"; opacity: 1; }
 table.sortable th[aria-sort=descending]::after { content: " ▼"; opacity: 1; }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+td.id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; white-space: nowrap; }
 table.route td:last-child { color: var(--muted); font-size: 13px; }
 .summary { margin-top: 12px; font-variant-numeric: tabular-nums; }
 .summary p { margin: 3px 0; }
