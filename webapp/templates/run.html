@@ -27,6 +27,13 @@
   </script>
   <h1>{% if run.name %}{{ run.name }}: {% endif %}{% if run.status == 'done' %}{{ '{:,}'.format(run.points) }} points{% else %}Planning{% endif %}</h1>
   <p class="muted">{{ describe(run.settings) }}</p>
+  <details class="rename">
+    <summary>{{ 'Rename' if run.name else 'Name this scenario' }}</summary>
+    <form method="post" action="{{ url_for('rename_run', run_id=run.id) }}">
+      <input name="name" maxlength="60" value="{{ run.name or '' }}" placeholder='e.g. "fast photos"' aria-label="Name">
+      <button type="submit">Save</button>
+    </form>
+  </details>
 
   {% if run.status in ('queued', 'running') %}
     <p class="status" id="state">{{ state }}</p>

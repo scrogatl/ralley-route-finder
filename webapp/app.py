@@ -89,6 +89,18 @@ def save_run(run):
     os.replace(path + '.tmp', path)
 
 
+# Held while a run's file is read, changed and saved again
+save_lock = threading.Lock()
+
+
+def save_worker_copy(run):
+    """Save the worker's copy of a run, keeping any name given to it since
+    the worker loaded it."""
+    with save_lock:
+        run['name'] = load_run(run['id']).get('name', '')
+        save_run(run)
+
+
 def all_runs():
     runs = []
     for name in os.listdir(RESULTS_DIR):
@@ -172,11 +184,11 @@ def plan(run):
     except SystemExit as stop:
         run.update(status='error', error=str(stop.code).removeprefix('ERROR: ').replace('--must', 'Must visit')
                    .replace('--first', 'First stops'))
-        save_run(run)
+        save_worker_copy(run)
         return
     except Exception as error:
         run.update(status='error', error=f"The planner failed: {error}")
-        save_run(run)
+        save_worker_copy(run)
         raise
 
     legs = list(planRoute.route_legs(planner, route))
@@ -195,7 +207,7 @@ def plan(run):
                           arrive=planRoute.time_of_day(planner, leg.arrive), score=leg.score,
                           notes=planRoute.leg_notes(planner, leg))
                      for leg in legs])
-    save_run(run)
+    save_worker_copy(run)
 
 
 def worker():
@@ -206,7 +218,7 @@ def worker():
         planRoute.progress = lambda text, run_id=run_id: progress.__setitem__(run_id, text.strip())
         run = load_run(run_id)
         run['status'] = 'running'
-        save_run(run)
+        save_worker_copy(run)
         try:
             plan(run)
         except Exception:
@@ -286,6 +298,15 @@ def show_run(run_id):
                            newer=newer, older=older, position=at + 1, total=len(ids),
                            bonuses=[dict(code=b['code'], lat=b['lat'], lon=b['lon'], points=b['points'])
                                     for b in bonuses])
+
+
+@app.post('/run/<run_id>/name')
+def rename_run(run_id):
+    with save_lock:
+        run = load_run(run_id)
+        run['name'] = request.form.get('name', '').strip()[:60]
+        save_run(run)
+    return redirect(url_for('show_run', run_id=run_id))
 
 
 @app.get('/run/<run_id>/status')

@@ -105,6 +105,9 @@ table.route td:last-child { color: var(--muted); font-size: 13px; }
 .summary { margin-top: 12px; font-variant-numeric: tabular-nums; }
 .summary p { margin: 3px 0; }
 details { margin-top: 12px; }
+.rename { margin: 0 0 8px; }
+.rename form { display: flex; gap: 8px; margin-top: 8px; max-width: 420px; }
+.rename button { padding: 6px 14px; }
 summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 
 #map { height: 480px; border-radius: 8px; }
