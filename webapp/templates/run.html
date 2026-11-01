@@ -51,10 +51,10 @@
 <section class="card">
   <h2>Route</h2>
   <div class="table-wrap">
-    <table class="route">
+    <table class="route sortable">
       <thead>
-        <tr><th>#</th><th>Bonus</th><th>Points</th><th>Leg mi</th><th>Total mi</th><th>Arrive</th>
-          <th>Leave (h)</th><th>Score</th><th>Notes</th></tr>
+        <tr><th class="num">#</th><th>Bonus</th><th class="num">Points</th><th class="num">Leg mi</th><th class="num">Total mi</th><th class="num">Arrive</th>
+          <th class="num">Leave (h)</th><th class="num">Score</th><th>Notes</th></tr>
       </thead>
       <tbody>
         {% for leg in run.legs %}
@@ -64,7 +64,7 @@
             <td class="num">{{ leg.points }}</td>
             <td class="num">{{ leg.leg_miles }}</td>
             <td class="num">{{ leg.miles }}</td>
-            <td class="num">{{ leg.arrive }}</td>
+            <td class="num" data-sort="{{ leg.leave }}">{{ leg.arrive }}</td>
             <td class="num">{{ '%.2f' % leg.leave }}</td>
             <td class="num">{{ '{:,}'.format(leg.score) }}</td>
             <td>{{ leg.notes | join('; ') }}</td>

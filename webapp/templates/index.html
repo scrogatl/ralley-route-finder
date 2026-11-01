@@ -51,14 +51,14 @@
     <h2>Scenarios run so far</h2>
     {% if runs %}
       <div class="table-wrap">
-        <table class="runs">
+        <table class="runs sortable">
           <thead>
-            <tr><th>Points</th><th>Stops</th><th>Hours</th><th>Settings</th><th>Run</th></tr>
+            <tr><th class="num">Points</th><th class="num">Stops</th><th class="num">Hours</th><th>Settings</th><th>Run</th></tr>
           </thead>
           <tbody>
             {% for run in runs %}
               <tr>
-                <td class="num">
+                <td class="num" data-sort="{{ run.points if run.status == 'done' else '' }}">
                   {% if run.status == 'done' %}<a href="{{ url_for('show_run', run_id=run.id) }}"><strong>{{ '{:,}'.format(run.points) }}</strong></a>
                   {% elif run.status == 'error' %}<a href="{{ url_for('show_run', run_id=run.id) }}">error</a>
                   {% else %}<a href="{{ url_for('show_run', run_id=run.id) }}">{{ run.status }}…</a>{% endif %}
@@ -66,7 +66,7 @@
                 <td class="num">{{ run.stops if run.status == 'done' else '' }}</td>
                 <td class="num">{{ run.hours if run.status == 'done' else '' }}</td>
                 <td>{% if run.name %}<strong>{{ run.name }}</strong><br>{% endif %}{{ describe(run.settings) }}</td>
-                <td class="muted">{{ run.created[5:16].replace('T', ' ') }} UTC</td>
+                <td class="muted" data-sort="{{ run.created }}">{{ run.created[5:16].replace('T', ' ') }} UTC</td>
               </tr>
             {% endfor %}
           </tbody>

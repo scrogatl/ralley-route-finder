@@ -89,6 +89,11 @@ button, .button {
 table { border-collapse: collapse; width: 100%; font-size: 14px; }
 th, td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
 th { font-size: 12px; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); white-space: nowrap; }
+table.sortable th { cursor: pointer; user-select: none; }
+table.sortable th:hover, table.sortable th:focus-visible { color: var(--accent); }
+table.sortable th::after { content: " ↕"; opacity: .35; }
+table.sortable th[aria-sort=ascending]::after { content: " ▲"; opacity: 1; }
+table.sortable th[aria-sort=descending]::after { content: " ▼"; opacity: 1; }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 table.route td:last-child { color: var(--muted); font-size: 13px; }
 .summary { margin-top: 12px; font-variant-numeric: tabular-nums; }
