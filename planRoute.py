@@ -117,20 +117,30 @@ def add_first_args(parser):
     parser.add_argument('--first', metavar='CODES',
                         help='start the route with these bonuses, in this order, e.g. CGSH,SMCH; '
                              'the search plans the rest of the day after them')
+    parser.add_argument('--must', metavar='CODES',
+                        help='visit these bonuses, in whatever order fits best, e.g. CGSH,SMCH')
+
+
+def bonus_indexes(planner, option, text):
+    """Place indexes for a comma-separated list of bonus codes."""
+    index = {place['code'].upper(): i for i, place in enumerate(planner.places) if i}
+    codes = [code.strip().upper() for code in text.split(',') if code.strip()]
+    unknown = [code for code in codes if code not in index]
+    if unknown:
+        sys.exit(f"ERROR: {option}: no bonus with code {', '.join(unknown)}")
+    if len(set(codes)) != len(codes):
+        sys.exit(f"ERROR: {option} names a bonus more than once")
+    return [index[code] for code in codes]
 
 
 def apply_first(planner, args):
-    """Lock in the --first stops at the start of the planner's route."""
+    """Lock in the --first stops at the start of the planner's route, and
+    the --must bonuses anywhere in it."""
+    if getattr(args, 'must', None):
+        planner.required = frozenset(bonus_indexes(planner, '--must', args.must))
     if not args.first:
         return
-    index = {place['code'].upper(): i for i, place in enumerate(planner.places) if i}
-    codes = [code.strip().upper() for code in args.first.split(',') if code.strip()]
-    unknown = [code for code in codes if code not in index]
-    if unknown:
-        sys.exit(f"ERROR: --first: no bonus with code {', '.join(unknown)}")
-    if len(set(codes)) != len(codes):
-        sys.exit("ERROR: --first names a bonus more than once")
-    planner.lead = [index[code] for code in codes]
+    planner.lead = bonus_indexes(planner, '--first', args.first)
     if planner.route_hours(planner.lead) > planner.max_hours:
         sys.exit(f"ERROR: --first {', '.join(codes)} takes {planner.route_hours(planner.lead):.2f} hours "
                  f"with the drive back, more than the {planner.max_hours} hour budget")
@@ -209,9 +219,12 @@ def describe_hours(planner):
 
 
 def describe_first(planner):
-    if not planner.lead:
-        return "no forced first stops"
-    return "first: " + ", ".join(planner.places[b]['code'] for b in planner.lead)
+    parts = []
+    if planner.lead:
+        parts.append("first: " + ", ".join(planner.places[b]['code'] for b in planner.lead))
+    if planner.required:
+        parts.append("must visit: " + ", ".join(sorted(planner.places[b]['code'] for b in planner.required)))
+    return "; ".join(parts) or "no forced stops"
 
 
 def describe_slow_zones(zones):
@@ -266,6 +279,8 @@ class Planner:
         # Stops locked in at the start of every route (--first); the
         # search only changes what comes after them
         self.lead = []
+        # Stops every route must have, in any order (--must)
+        self.required = frozenset()
         # Combo bonuses, (code, points, frozenset of stops): the points count
         # only if the route has every one of those stops (--combos)
         self.combos = []
@@ -383,18 +398,23 @@ class Planner:
                 points[next(iter(missing))] += combo_points
         return points
 
+    def insert_cheapest(self, route, b):
+        """The route with b inserted where it adds the least time, or None if
+        it doesn't fit anywhere."""
+        hours, k = min((self.route_hours(route[:k] + [b] + route[k:]), k)
+                       for k in range(len(self.lead), len(route) + 1))
+        return route[:k] + [b] + route[k:] if hours <= self.max_hours else None
+
     def combo_seed(self, combos):
-        """A route through the --first stops and every stop of these combos,
-        each inserted where it adds the least time (farthest from HQ first),
-        or None if they can't all fit in the time budget."""
+        """A route through the --first stops, the --must stops and every stop
+        of these combos, each inserted where it adds the least time (farthest
+        from HQ first), or None if they can't all fit in the time budget."""
         route = list(self.lead)
-        members = set().union(*(members for _, _, members in combos)) - set(route)
+        members = (set().union(*(members for _, _, members in combos)) | self.required) - set(route)
         for b in sorted(members, key=lambda b: (-self.hours[0][b], b)):
-            options = [(self.route_hours(route[:k] + [b] + route[k:]), k) for k in range(len(self.lead), len(route) + 1)]
-            hours, k = min(options)
-            if hours > self.max_hours:
+            route = self.insert_cheapest(route, b)
+            if route is None:
                 return None
-            route.insert(k, b)
         route = self.two_opt(route)
         return route if self.route_hours(route) <= self.max_hours else None
 
@@ -622,6 +642,10 @@ class Planner:
         if self.windows is not None and self.route_hours(a) > self.max_hours:
             # Dropping stops can make a route miss a bonus's hours or run over
             return False
+        if self.required:
+            missing_a, missing_b = len(self.required - set(a)), len(self.required - set(b))
+            if missing_a != missing_b:
+                return missing_a < missing_b
         va, vb = self.route_value(a), self.route_value(b)
         if abs(va - vb) > 1e-9:
             return va > vb
@@ -638,6 +662,8 @@ class Planner:
             improved = False
             for length in range(1, max_drop + 1):
                 for start in range(len(self.lead), len(route) - length + 1):
+                    if self.required.intersection(route[start:start + length]):
+                        continue
                     candidate = self.improve(route[:start] + route[start + length:], weight)
                     if self.better(candidate, route):
                         route = candidate
@@ -655,6 +681,8 @@ class Planner:
             improved = False
             unvisited = [b for b in range(1, len(self.places)) if b not in route]
             for i in range(len(self.lead), len(route)):
+                if route[i] in self.required:
+                    continue
                 base = route[:i] + route[i + 1:]
                 stops = [0] + base + [0]
                 for b in unvisited:
@@ -680,10 +708,17 @@ class Planner:
         # Start once from an empty route, then once from each bonus on its own,
         # so every bonus gets a chance to anchor the route. Skip bonuses too far
         # for a round trip, since nothing later would drop them from the route.
-        # Any --first stops come before all of that.
+        # Any --first stops come before all of that, and every start already
+        # has the --must stops, put where they add the least time.
         lead = self.lead
-        starts = [lead] + [lead + [b] for b in range(1, len(self.places))
-                           if b not in lead and self.route_hours(lead + [b]) <= self.max_hours]
+        base = self.combo_seed(())
+        if base is None:
+            sys.exit("ERROR: --must: those bonuses don't all fit in the time budget"
+                     + (" with the --first stops" if lead else "")
+                     + (" and their hours" if self.windows and any(self.windows[b] for b in self.required)
+                        else ""))
+        starts = [base] + [route for route in (self.insert_cheapest(base, b) for b in range(1, len(self.places))
+                                               if b not in base) if route is not None]
         # Inserting one bonus at a time rarely builds a whole combo, so also
         # start from every set of combos that fits, with all their stops
         for size in range(1, len(self.combos) + 1):
@@ -721,9 +756,9 @@ class Planner:
         progress(f"Search done: {self.route_points(best)} points in {clock(time.monotonic() - started)}")
         print(file=sys.stderr)
         if (len(set(best)) != len(best) or self.route_hours(best) > self.max_hours + 1e-9
-                or best[:len(lead)] != lead):
-            sys.exit("ERROR: planner produced an invalid route (repeated bonus, over time or --first stops "
-                     "moved); this is a bug")
+                or best[:len(lead)] != lead or not self.required <= set(best)):
+            sys.exit("ERROR: planner produced an invalid route (repeated bonus, over time, --first stops "
+                     "moved or a --must stop missing); this is a bug")
         return best
 
 

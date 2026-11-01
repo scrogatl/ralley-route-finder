@@ -170,6 +170,11 @@ def solve_exact(planner, time_limit, workers, hint):
             sys.exit(f"ERROR: the leg {places[a]['code']} to {places[b]['code']} was left out as too long; "
                      f"try fewer --first stops")
         model.Add(arc_vars[a, b] == 1)
+    # --must stops: visited, in any order
+    for b in sorted(planner.required):
+        if b not in visit:
+            sys.exit(f"ERROR: --must: {places[b]['code']} can't be reached and back within the time budget")
+        model.Add(visit[b] == 1)
     # Gas stops: at least one for each full gas_miles driven
     # (gas * interval > miles - interval, i.e. gas >= floor(miles / interval))
     gas = model.NewIntVar(0, 1000, 'gas_stops')
@@ -277,9 +282,9 @@ def main():
 
     # Check the answer independently of the solver
     if (len(set(route)) != len(route) or planner.route_hours(route) > planner.max_hours + 1e-9
-            or route[:len(planner.lead)] != planner.lead):
-        sys.exit("ERROR: solver returned an invalid route (repeated bonus, over time or --first stops "
-                 "moved); this is a bug")
+            or route[:len(planner.lead)] != planner.lead or not planner.required <= set(route)):
+        sys.exit("ERROR: solver returned an invalid route (repeated bonus, over time, --first stops "
+                 "moved or a --must stop missing); this is a bug")
     # The solver rounds times up to be safe, so a route that fits with a
     # fraction of a second to spare can look too long to it; never report
     # worse than planRoute.py's route

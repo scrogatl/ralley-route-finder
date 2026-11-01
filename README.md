@@ -193,6 +193,7 @@ PyPy.
 | `--max-drop` | 6 | Longest run of stops the search tries removing at once; higher is slower |
 | `--front-load` | 0 | Favor collecting points early, in case the day is cut short (see below) |
 | `--first` | none | Start with these bonuses, in this order, e.g. `CGSH,SMCH` (see below) |
+| `--must` | none | Visit these bonuses, in whatever order fits best (see below) |
 | `--start` | 07:00 | Rally start time, for the hours bonuses are open |
 | `--ignore-hours` | | Plan as if every bonus is open all day |
 | `--combos` | bonus-combos.csv | Combo bonuses from the rally book, used if the file exists |
@@ -217,7 +218,7 @@ The output ends with a `Banked:` line showing the points collected by a
 quarter, half and three quarters of the way through the day. Compare that
 line across a few `--front-load` values to choose one.
 
-### Choosing the first stops
+### Choosing the first stops, or stops the route must have
 
 `--first` makes the route start with the bonuses you name, in the order you
 give them, and the search plans the rest of the day after them. It's for
@@ -235,6 +236,37 @@ Compare the `Banked:` line and total with a run without `--first`. On the
 2026 map, starting with CGSH and SMCH scores about 1,100 points less and
 banks less at every hour, because the normal route collects bonuses along the
 way and still reaches those two by hour 4.
+
+`--must` is the same idea without fixing the order: the route has to visit
+the bonuses you name, and the search decides when, around everything else.
+The web app's "Must visit" box does this.
+
+```bash
+python planRoute.py --must MTNH,ENOR,UGCB
+```
+
+It stops with an error if those bonuses can't all fit in one day together.
+The two can be combined, and `planRouteExact.py` takes both.
+
+### Finding clusters of bonuses
+
+`findClusters.py` lists where the points are most concentrated. It tries
+each bonus as the center of a circle, scores it by the points inside, and
+picks the best circles that don't share bonuses. For each cluster it shows
+the hours to visit all of its bonuses in a loop, the points per hour of
+working it, and how far it is from Rally HQ. It takes a second and ignores
+bonus hours and combos.
+
+```bash
+python findClusters.py --radius 20 --speed 60 --stop-minutes 8 --road-factor 1.25
+```
+
+Try a few radii: 10 miles shows tight groups you can sweep in an hour, 35
+miles shows regions worth a half day. Feed a cluster to the planner with
+`--must` or `--first` to see whether it pays. On the 2026 map the densest cluster is
+around Statesboro (BISH, LOGS, FABF and others), but it's about 160 road
+miles from HQ: an 8-hour route forced to start there (`--first LOGS`) scores
+6,171 against 8,108 without, because the round trip eats over 5 hours.
 
 ### How the search works
 

@@ -51,7 +51,7 @@ SWITCHES = [
 # How the list of runs describes a switch that's off
 SWITCHED_OFF = {'slow_zone': 'no Atlanta slow zone', 'use_hours': 'bonus hours ignored', 'use_combos': 'no combos'}
 DEFAULTS = {name: default for name, _, default, *_ in NUMBERS} | {name: on for name, _, on, _ in SWITCHES} | {
-    'first': '', 'start': planRoute.RALLY_START}
+    'must': '', 'start': planRoute.RALLY_START}
 
 app = Flask(__name__)
 os.makedirs(RESULTS_DIR, exist_ok=True)
@@ -127,7 +127,7 @@ def read_form(form):
         settings['start'] = planRoute.start_time(form.get('start', '').strip())
     except argparse.ArgumentTypeError as error:
         raise ValueError(f"Rally start: {error}")
-    settings['first'] = ','.join(code.strip().upper() for code in form.get('first', '').split(',') if code.strip())
+    settings['must'] = ','.join(code.strip().upper() for code in form.get('must', '').split(',') if code.strip())
     return settings
 
 
@@ -142,8 +142,11 @@ def describe(settings):
                      else 'no gas stops')
     if settings['start'] != planRoute.RALLY_START:
         parts.append(f"start {settings['start']}")
-    if settings['first']:
+    if settings.get('first'):
+        # Runs from before the form asked for must-visit bonuses instead
         parts.append(f"first {settings['first']}")
+    if settings.get('must'):
+        parts.append(f"must visit {settings['must']}")
     parts += [text for name, text in SWITCHED_OFF.items() if not settings[name]]
     return ', '.join(parts)
 
@@ -151,7 +154,7 @@ def describe(settings):
 def plan(run):
     """Run the planner for one saved run, and save the result or the error."""
     settings = run['settings']
-    args = argparse.Namespace(first=settings['first'], gas_miles=settings['gas_miles'],
+    args = argparse.Namespace(first=settings.get('first'), must=settings.get('must'), gas_miles=settings['gas_miles'],
                               gas_minutes=settings['gas_minutes'], combos=COMBOS_CSV,
                               ignore_combos=not settings['use_combos'])
     started = time.monotonic()
@@ -162,12 +165,13 @@ def plan(run):
                                     settings['road_factor'], settings['front_load'], slow_zones,
                                     settings['gas_miles'], settings['gas_minutes'], settings['start'],
                                     settings['use_hours'])
-        # The planner stops with sys.exit on bad input, e.g. an unknown --first code
+        # The planner stops with sys.exit on bad input, e.g. an unknown --must code
         planRoute.apply_first(planner, args)
         planRoute.apply_combos(planner, args)
         route = planner.solve(planRoute.START_WEIGHTS, 6, WORKERS)
     except SystemExit as stop:
-        run.update(status='error', error=str(stop.code).removeprefix('ERROR: ').replace('--first', 'First stops'))
+        run.update(status='error', error=str(stop.code).removeprefix('ERROR: ').replace('--must', 'Must visit')
+                   .replace('--first', 'First stops'))
         save_run(run)
         return
     except Exception as error:
