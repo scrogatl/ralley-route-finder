@@ -76,16 +76,17 @@ def main():
     print(f"{len(bonuses)} bonuses, {total:,} points; clusters within {args.radius:g} miles of a bonus, "
           f"{args.speed:g} MPH, {args.stop_minutes:g} min per stop, road factor {args.road_factor:g}\n")
     print(f"{'#':>2}  {'Center':<6} {'Bonuses':>7} {'Points':>7} {'Share':>6} {'Loop mi':>7} {'Hours':>5} "
-          f"{'Pts/h':>6} {'HQ mi':>6}  Members (points)")
+          f"{'Pts/h':>6} {'HQ mi':>6}  Members, highest points first")
     for n, (points, center, members) in enumerate(clusters, 1):
         miles = loop_miles(sorted(members, key=lambda b: b['code'])) * args.road_factor
         hours = miles / args.speed + len(members) * args.stop_minutes / 60
         members = sorted(members, key=lambda b: -b['points'])
         print(f"{n:>2}  {center['code']:<6} {len(members):>7} {points:>7,} {points / total:>6.0%} {miles:>7.0f} "
               f"{hours:>5.1f} {points / hours:>6,.0f} {haversine_miles(hq, center) * args.road_factor:>6.0f}  "
-              + ' '.join(f"{b['code']}({b['points']})" for b in members))
+              + ','.join(b['code'] for b in members))
     print("\nLoop mi and Hours: a loop through the cluster's bonuses, not counting getting there. "
-          "HQ mi: from Rally HQ to the center bonus.")
+          "HQ mi: from Rally HQ to the center bonus.\nMembers can be pasted into the web app's Must visit box "
+          "or given to planRoute.py --must.")
 
 
 if __name__ == "__main__":
