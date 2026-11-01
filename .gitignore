@@ -14,3 +14,9 @@ path_to_queue/
 
 # LibreOffice lock files
 .~lock.*
+
+# Web app: bonus files copied onto the server, the server's settings, and
+# runs saved when trying it locally
+/data/
+.env
+/web-scenarios/

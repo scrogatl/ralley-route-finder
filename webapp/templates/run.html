@@ -1,0 +1,108 @@
+{% extends 'base.html' %}
+{% block title %}{{ '{:,} points'.format(run.points) if run.status == 'done' else 'Planning' }} · Rally Route Finder{% endblock %}
+{% block head %}
+  {% if run.status == 'done' %}
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  {% endif %}
+{% endblock %}
+{% block main %}
+<section class="card">
+  <p class="back"><a href="{{ url_for('index') }}">← All scenarios</a></p>
+  <h1>{% if run.name %}{{ run.name }}: {% endif %}{% if run.status == 'done' %}{{ '{:,}'.format(run.points) }} points{% else %}Planning{% endif %}</h1>
+  <p class="muted">{{ describe(run.settings) }}</p>
+
+  {% if run.status in ('queued', 'running') %}
+    <p class="status" id="state">{{ state }}</p>
+    <p class="note">This page updates by itself when the route is ready.</p>
+    <script>
+      (function poll() {
+        fetch("{{ url_for('run_status', run_id=run.id) }}").then(r => r.json()).then(s => {
+          if (s.status === 'done' || s.status === 'error') { location.reload(); return; }
+          document.getElementById('state').textContent = s.state;
+          setTimeout(poll, 2000);
+        }).catch(() => setTimeout(poll, 5000));
+      })();
+    </script>
+  {% elif run.status == 'error' %}
+    <p class="error">{{ run.error }}</p>
+    <p><a class="button" href="{{ url_for('index', **{'from': run.id}) }}">Change the settings</a></p>
+  {% else %}
+    <div class="headline">
+      <div><span>{{ run.stops }}</span>bonuses</div>
+      <div><span>{{ run.miles }}</span>est. miles</div>
+      <div><span>{{ run.hours }}</span>of {{ run.settings.hours }} hours</div>
+      <div><span>{{ run.seconds }} s</span>to plan</div>
+    </div>
+    <p class="actions">
+      <a class="button" href="{{ url_for('run_gpx', run_id=run.id) }}">Download GPX</a>
+      <a class="button secondary" href="{{ url_for('index', **{'from': run.id}) }}">Try changes to this scenario</a>
+    </p>
+  {% endif %}
+</section>
+
+{% if run.status == 'done' %}
+<section class="card">
+  <div id="map"></div>
+  <p class="note">Numbered dots are the route's stops, in order; small grey dots are the bonuses it skips.
+    Lines are straight, as the planner sees them, not roads.</p>
+</section>
+
+<section class="card">
+  <h2>Route</h2>
+  <div class="table-wrap">
+    <table class="route">
+      <thead>
+        <tr><th>#</th><th>Bonus</th><th>Points</th><th>Leg mi</th><th>Total mi</th><th>Arrive</th>
+          <th>Leave (h)</th><th>Score</th><th>Notes</th></tr>
+      </thead>
+      <tbody>
+        {% for leg in run.legs %}
+          <tr>
+            <td class="num">{{ loop.index0 }}</td>
+            <td><strong>{{ leg.code }}</strong> <span class="muted">{{ leg.state }}</span></td>
+            <td class="num">{{ leg.points }}</td>
+            <td class="num">{{ leg.leg_miles }}</td>
+            <td class="num">{{ leg.miles }}</td>
+            <td class="num">{{ leg.arrive }}</td>
+            <td class="num">{{ '%.2f' % leg.leave }}</td>
+            <td class="num">{{ '{:,}'.format(leg.score) }}</td>
+            <td>{{ leg.notes | join('; ') }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="summary">
+    {% for line in run.summary %}<p>{{ line }}</p>{% endfor %}
+  </div>
+  <details>
+    <summary>Planner settings</summary>
+    {% for line in run.settings_lines %}<p class="muted">{{ line }}</p>{% endfor %}
+  </details>
+</section>
+
+<script>
+  const legs = {{ run.legs | tojson }};
+  const bonuses = {{ bonuses | tojson }};
+  const map = L.map('map');
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 18, attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(map);
+  const visited = new Set(legs.map(l => l.code));
+  for (const b of bonuses) {
+    if (visited.has(b.code)) continue;
+    L.circleMarker([b.lat, b.lon], {radius: 4, color: '#8a8f98', weight: 1, fillOpacity: 0.5})
+      .bindTooltip(`${b.code} · ${b.points}`).addTo(map);
+  }
+  const line = L.polyline(legs.map(l => [l.lat, l.lon]), {color: '#1f5fbf', weight: 3, opacity: 0.8}).addTo(map);
+  legs.slice(0, -1).forEach((l, n) => {
+    const label = n === 0 ? 'HQ' : String(n);
+    const icon = L.divIcon({className: n === 0 ? 'stop hq' : 'stop', html: label, iconSize: n === 0 ? [30, 22] : [22, 22]});
+    L.marker([l.lat, l.lon], {icon}).addTo(map)
+      .bindTooltip(n === 0 ? l.code : `${n}. ${l.code} · ${l.points} pts · ${l.arrive}` + (l.notes.length ? ' · ' + l.notes.join('; ') : ''));
+  });
+  map.fitBounds(line.getBounds(), {padding: [20, 20]});
+</script>
+{% endif %}
+{% endblock %}

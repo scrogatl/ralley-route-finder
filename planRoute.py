@@ -840,37 +840,35 @@ def write_gpx(planner, route, gpx_file_path):
     ET.ElementTree(gpx).write(gpx_file_path, encoding='utf-8', xml_declaration=True)
 
 
-def print_route(planner, route):
-    print(f"{'#':>3}  {'Bonus':<24} {'State':<5} {'Points':>6} {'Leg mi':>7} {'Total mi':>8} {'Hours':>6} "
-          f"{'Arrive':>6} {'Score':>6}")
-    legs = list(route_legs(planner, route))
-    for n, leg in enumerate(legs):
-        notes = []
-        if leg.gas:
-            notes.append(f"+ {leg.gas} gas stop{'s' if leg.gas > 1 else ''} on the way")
-        if leg.wait:
-            notes.append(f"waits {leg.wait * 60:.0f} min to open at {leg.place['opens']}")
-        elif leg.place.get('opens') and planner.windows:
-            notes.append(f"open {leg.place['opens']}-{leg.place['closes']}")
-        notes += [f"completes {code} combo +{points}" for code, points in leg.combos]
-        print(f"{n:>3}  {leg.place['code']:<24} {leg.place['state']:<5} {leg.place['points']:>6} "
-              f"{leg.leg_miles:>7.1f} {leg.miles:>8.1f} {leg.hours:>6.2f} {time_of_day(planner, leg.arrive):>6} "
-              f"{leg.score:>6}{'  ' + '; '.join(notes) if notes else ''}")
+def leg_notes(planner, leg):
+    """Notes for one stop in the route table: gas stops, waits, hours and combos."""
+    notes = []
+    if leg.gas:
+        notes.append(f"+ {leg.gas} gas stop{'s' if leg.gas > 1 else ''} on the way")
+    if leg.wait:
+        notes.append(f"waits {leg.wait * 60:.0f} min to open at {leg.place['opens']}")
+    elif leg.place.get('opens') and planner.windows:
+        notes.append(f"open {leg.place['opens']}-{leg.place['closes']}")
+    notes += [f"completes {code} combo +{points}" for code, points in leg.combos]
+    return notes
+
+
+def summary_lines(planner, route, legs):
+    """The lines printed under the route table: totals, combos and points banked."""
     last = legs[-1]
     places = planner.places
-    print()
-    print(f"Bonuses: {len(route)}   Points: {last.score}   Miles: {last.miles:.0f}   "
-          f"Gas stops: {planner.gas_stops(last.miles)}   Hours: {last.hours:.2f} of {planner.max_hours}")
-    print(f"States: {len(set(places[i]['state'] for i in route))}   "
-          f"Points per mile: {last.score / last.miles if last.miles else 0:.1f}")
+    lines = [f"Bonuses: {len(route)}   Points: {last.score}   Miles: {last.miles:.0f}   "
+             f"Gas stops: {planner.gas_stops(last.miles)}   Hours: {last.hours:.2f} of {planner.max_hours}",
+             f"States: {len(set(places[i]['state'] for i in route))}   "
+             f"Points per mile: {last.score / last.miles if last.miles else 0:.1f}"]
     if planner.combos:
         done = [combo for leg in legs for combo in leg.combos]
         stops = set(route)
         partial = [f"{code} {len(members & stops)} of {len(members)}" for code, _, members in planner.combos
                    if members & stops and not members <= stops]
-        print(f"Combos: " + (", ".join(f"{code} +{points}" for code, points in done) or "none")
-              + f" ({sum(points for _, points in done)} points)"
-              + (f"; partly visited, not scored: {', '.join(partial)}" if partial else ''))
+        lines.append(f"Combos: " + (", ".join(f"{code} +{points}" for code, points in done) or "none")
+                     + f" ({sum(points for _, points in done)} points)"
+                     + (f"; partly visited, not scored: {', '.join(partial)}" if partial else ''))
 
     # How many points are already banked if the day is cut short
     banked = []
@@ -879,7 +877,22 @@ def print_route(planner, route):
         # Scores only go up along the route, combos counting when completed
         got = max(leg.score for leg in legs if leg.arrive + leg.wait <= cutoff)
         banked.append(f"{got} ({got / last.score:.0%}) by hour {cutoff:g}" if last.score else f"0 by hour {cutoff:g}")
-    print("Banked: " + ", ".join(banked))
+    lines.append("Banked: " + ", ".join(banked))
+    return lines
+
+
+def print_route(planner, route):
+    print(f"{'#':>3}  {'Bonus':<24} {'State':<5} {'Points':>6} {'Leg mi':>7} {'Total mi':>8} {'Hours':>6} "
+          f"{'Arrive':>6} {'Score':>6}")
+    legs = list(route_legs(planner, route))
+    for n, leg in enumerate(legs):
+        notes = leg_notes(planner, leg)
+        print(f"{n:>3}  {leg.place['code']:<24} {leg.place['state']:<5} {leg.place['points']:>6} "
+              f"{leg.leg_miles:>7.1f} {leg.miles:>8.1f} {leg.hours:>6.2f} {time_of_day(planner, leg.arrive):>6} "
+              f"{leg.score:>6}{'  ' + '; '.join(notes) if notes else ''}")
+    print()
+    for line in summary_lines(planner, route, legs):
+        print(line)
 
 
 def main():

@@ -1,0 +1,31 @@
+# The web app plus Caddy, which gets an HTTPS certificate for DOMAIN
+# automatically. Settings go in a .env file next to this one:
+#   APP_PASSWORD=the-site-password
+#   DOMAIN=routes.example.com   (or 203-0-113-5.sslip.io for server IP 203.0.113.5)
+services:
+  app:
+    build: .
+    environment:
+      APP_PASSWORD: ${APP_PASSWORD:?set APP_PASSWORD in .env}
+    volumes:
+      - ./data:/data:ro
+      - results:/results
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2.8.4
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on:
+      - app
+    restart: unless-stopped
+
+volumes:
+  results:
+  caddy_data:

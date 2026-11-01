@@ -414,3 +414,85 @@ The solver works in hundredths of a second and rounds driving times up to
 be safe, so it could rule out a route that fits with less than a second to
 spare. If `planRoute.py` finds such a route scoring more, it reports that
 route instead, marked `NOT PROVEN`.
+
+## Web app
+
+`webapp/` is a small password-protected website where others can run
+`planRoute.py` scenarios and see the results: a form with the planner's
+settings, then a page with the route table, a map of the stops and a GPX
+download. Every run is saved and listed on the home page to compare, and the
+same settings on the same data show the saved result straight away. Runs go
+one at a time, since each uses every CPU core; on a 4-core server one takes
+about a minute. It never calls Google, so it costs nothing beyond the server.
+The exact solver isn't included: it can run for hours.
+
+It reads the files from step 1, `bonus-lat-lon-points.csv` and
+`bonus-combos.csv`. The bonus data comes from the rally book, so keep the
+password to people the rally allows to see it.
+
+### Running it on a cloud server
+
+`docker-compose.yml` runs the app under PyPy, plus [Caddy](https://caddyserver.com),
+which gets an HTTPS certificate automatically so the password isn't sent in
+the clear.
+
+1. Create a Linux server (Ubuntu 24.04) with 4 vCPUs and 4–8 GB of memory,
+   from any provider (Hetzner, DigitalOcean, Linode, ...). Allow incoming
+   ports 22, 80 and 443. More vCPUs make each run faster.
+2. A domain name for it: either point one you own at the server's IP, or use
+   [sslip.io](https://sslip.io), which needs no setup: for IP 203.0.113.5,
+   use `203-0-113-5.sslip.io`.
+3. Install Docker on the server:
+
+    ```bash
+    ssh root@SERVER 'curl -fsSL https://get.docker.com | sh'
+    ```
+
+4. Copy the code and the bonus files from this folder (the repo has no remote
+   to clone from):
+
+    ```bash
+    rsync -a --exclude .venv --exclude .git --exclude '*.gpx' ./ root@SERVER:/opt/rally-route-finder/
+    ssh root@SERVER 'mkdir -p /opt/rally-route-finder/data'
+    scp bonus-lat-lon-points.csv bonus-combos.csv root@SERVER:/opt/rally-route-finder/data/
+    ```
+
+5. On the server, set the password and domain, then start it:
+
+    ```bash
+    cd /opt/rally-route-finder
+    printf 'APP_PASSWORD=%s\nDOMAIN=%s\n' 'choose-a-password' '203-0-113-5.sslip.io' > .env
+    docker compose up -d --build
+    ```
+
+Copy the bonus files before the first `docker compose up`: if `data/` doesn't
+exist then, Docker creates it empty and owned by root, and the site says "No
+bonus data on the server yet". To fix that, run `docker compose down`, remove
+the empty `data/`, then do step 4's copy again and start it.
+
+Then open `https://DOMAIN`. The browser asks for a user name and password:
+any user name works, with the password from `.env`.
+
+- **New bonus data:** run step 1 again here, and copy the two CSVs into
+  `data/` on the server as in step 4. No restart needed; runs with the new
+  data are planned fresh, and earlier ones stay listed.
+- **New code:** repeat the `rsync` in step 4, then
+  `docker compose up -d --build` on the server. Saved runs are kept (in a
+  Docker volume), and runs that were waiting start again.
+- **Change the password:** edit `.env`, then `docker compose up -d`.
+- **Logs:** `docker compose logs -f app`.
+
+### Trying it locally
+
+```bash
+docker build -t rally-route-finder .
+docker run --rm -p 8000:8000 -e APP_PASSWORD=test -v "$PWD:/data:ro" -v "$PWD/web-scenarios:/results" rally-route-finder
+```
+
+Then open <http://localhost:8000> (password `test`). Or without Docker,
+under regular Python (runs take about 5 minutes):
+
+```bash
+pip install -r webapp/requirements.txt
+APP_PASSWORD=test flask --app webapp/app.py run
+```

@@ -1,0 +1,80 @@
+{% extends 'base.html' %}
+{% block main %}
+<div class="layout">
+  <section class="card form-card">
+    <h1>New scenario</h1>
+    {% if not has_data %}
+      <p class="error">No bonus data on the server yet. Copy bonus-lat-lon-points.csv and bonus-combos.csv
+        into its data folder.</p>
+    {% endif %}
+    {% if error %}<p class="error">{{ error }}</p>{% endif %}
+    <form method="post" action="{{ url_for('start_run') }}">
+      <label class="field wide">
+        <span>Name <small>optional, e.g. "fast photos"</small></span>
+        <input name="name" maxlength="60" value="{{ settings.get('name', '') }}">
+      </label>
+      <div class="grid">
+        {% for name, label, default, low, high, help in numbers %}
+          <label class="field">
+            <span>{{ label }}</span>
+            <input name="{{ name }}" type="number" step="any" min="{{ low }}" max="{{ high }}"
+                   value="{{ settings[name] }}" required>
+            {% if help %}<small>{{ help }}</small>{% endif %}
+          </label>
+        {% endfor %}
+        <label class="field">
+          <span>Rally start</span>
+          <input name="start" value="{{ settings['start'] }}" pattern="\d{1,2}:\d{2}" required>
+          <small>24-hour HH:MM; bonus hours count from it</small>
+        </label>
+        <label class="field">
+          <span>First stops</span>
+          <input name="first" value="{{ settings['first'] }}" placeholder="e.g. CGSH,SMCH">
+          <small>bonus codes to start with, in order</small>
+        </label>
+      </div>
+      <div class="switches">
+        {% for name, label, on, help in switches %}
+          <label class="switch">
+            <input type="checkbox" name="{{ name }}" {% if settings[name] in (true, 'on') %}checked{% endif %}>
+            <span><strong>{{ label }}</strong> <small>{{ help }}</small></span>
+          </label>
+        {% endfor %}
+      </div>
+      <button type="submit">Plan route</button>
+      <p class="note">A run takes about a minute or two. Runs go one at a time; the same settings
+        show the saved result straight away.</p>
+    </form>
+  </section>
+
+  <section class="card runs-card">
+    <h2>Scenarios run so far</h2>
+    {% if runs %}
+      <div class="table-wrap">
+        <table class="runs">
+          <thead>
+            <tr><th>Points</th><th>Stops</th><th>Hours</th><th>Settings</th><th>Run</th></tr>
+          </thead>
+          <tbody>
+            {% for run in runs %}
+              <tr>
+                <td class="num">
+                  {% if run.status == 'done' %}<a href="{{ url_for('show_run', run_id=run.id) }}"><strong>{{ '{:,}'.format(run.points) }}</strong></a>
+                  {% elif run.status == 'error' %}<a href="{{ url_for('show_run', run_id=run.id) }}">error</a>
+                  {% else %}<a href="{{ url_for('show_run', run_id=run.id) }}">{{ run.status }}…</a>{% endif %}
+                </td>
+                <td class="num">{{ run.stops if run.status == 'done' else '' }}</td>
+                <td class="num">{{ run.hours if run.status == 'done' else '' }}</td>
+                <td>{% if run.name %}<strong>{{ run.name }}</strong><br>{% endif %}{{ describe(run.settings) }}</td>
+                <td class="muted">{{ run.created[5:16].replace('T', ' ') }} UTC</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="muted">None yet. Plan one on the left.</p>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}
