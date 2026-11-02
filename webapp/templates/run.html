@@ -127,11 +127,23 @@
         <span>Departure <small>optional, Georgia time</small></span>
         <input type="datetime-local" name="depart" value="{{ google_form.get('depart', '') }}">
       </label>
+      <label class="field percent">
+        <span>Highways <small>% faster</small></span>
+        <input type="number" name="highway_faster" min="-50" max="100" step="1" placeholder="0"
+               value="{{ google_form.get('highway_faster', '') }}">
+      </label>
+      <label class="field percent">
+        <span>Other roads <small>% faster</small></span>
+        <input type="number" name="surface_faster" min="-50" max="100" step="1" placeholder="0"
+               value="{{ google_form.get('surface_faster', '') }}">
+      </label>
       <button type="submit">Check with Google</button>
     </form>
     <p class="note">Leave the departure blank for road miles and times without traffic, in one request. With a
       departure, Google forecasts traffic leg by leg ({{ run.legs | length - 1 }} requests, billed at a higher
-      rate) and bonus hours count from that time. A check that's been done before shows the saved result.</p>
+      rate) and bonus hours count from that time. The percents drive faster than Google's times (negative for
+      slower): a stretch Google drives at {{ highway_mph }} mph or more counts as highway, and traffic delays stay
+      as Google forecasts them. A check that's been done before shows the saved result.</p>
   {% endif %}
   {% for check in run.checks %}
     <details class="check" id="google-{{ check.id }}" {% if loop.first %}open{% endif %}>

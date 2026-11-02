@@ -19,6 +19,11 @@ Without --depart, the whole route goes in one request per 25 stops and the
 times have no traffic. With --depart, each leg is its own request, leaving
 when you'd leave that stop, and the times include Google's traffic forecast.
 
+Google's times are for driving at about the usual speed. --highway-faster and
+--surface-faster drive that many percent faster (or slower, if negative):
+each turn-by-turn step Google averages --highway-mph or more on counts as
+highway, every other step as surface streets. Traffic delays aren't changed.
+
 Needs GMAPS_API_KEY in the environment, for a Google Cloud project with the
 Routes API turned on. A check is usually inside Google's free monthly usage.
 
@@ -35,6 +40,10 @@ METERS_PER_MILE = 1609.344
 ROUTES_URL = 'https://routes.googleapis.com/directions/v2:computeRoutes'
 # Ask only for what's used; Google requires this list and bills by it
 FIELD_MASK = 'routes.legs.distanceMeters,routes.legs.duration,routes.polyline.encodedPolyline'
+# Each step's miles and no-traffic time, to drive faster than Google's times
+STEPS_FIELD_MASK = FIELD_MASK + ',routes.legs.steps.distanceMeters,routes.legs.steps.staticDuration'
+# A step Google drives at this speed or more counts as highway
+HIGHWAY_MPH = 55
 # Google takes up to 25 stops between the start and end of one request
 MAX_WAYPOINTS = 25
 
@@ -72,15 +81,49 @@ def waypoint(place):
     return {'location': {'latLng': {'latitude': place['lat'], 'longitude': place['lon']}}}
 
 
-def leg_result(leg):
+def seconds(duration):
+    """Google writes durations as "123s"."""
+    return float(duration.rstrip('s'))
+
+
+def leg_result(leg, faster=None):
     """Road miles and driving hours for one leg of a Routes response. With
-    traffic on, the duration includes Google's traffic forecast."""
-    return leg.get('distanceMeters', 0) / METERS_PER_MILE, float(leg['duration'].rstrip('s')) / 3600
+    traffic on, the duration includes Google's traffic forecast. faster is
+    (highway percent, surface percent, highway mph) to drive faster than
+    Google: each step's no-traffic time is cut by its percent, and any
+    traffic delay is left as it is."""
+    hours = seconds(leg['duration']) / 3600
+    if faster:
+        highway, surface, highway_mph = faster
+        for step in leg.get('steps', []):
+            step_hours = seconds(step.get('staticDuration', '0s')) / 3600
+            if step_hours:
+                step_mph = step.get('distanceMeters', 0) / METERS_PER_MILE / step_hours
+                percent = highway if step_mph >= highway_mph else surface
+                hours -= step_hours - step_hours / (1 + percent / 100)
+    return leg.get('distanceMeters', 0) / METERS_PER_MILE, hours
 
 
-def directions(api_key, places, depart=None):
+def describe_faster(faster):
+    """E.g. "highways (55+ mph) 10% faster, other roads 5% faster"."""
+    highway, surface, highway_mph = faster
+
+    def change(percent):
+        return f"{abs(percent):g}% {'faster' if percent > 0 else 'slower'}" if percent else "at Google's speed"
+    return f"highways ({highway_mph:g}+ mph) {change(highway)}, other roads {change(surface)}"
+
+
+def make_faster(highway, surface, highway_mph=HIGHWAY_MPH):
+    """The faster argument for the fetch functions, or None when both are 0."""
+    if not -50 <= highway <= 100 or not -50 <= surface <= 100:
+        sys.exit("ERROR: the faster percents must be from -50 to 100")
+    return (highway, surface, highway_mph) if highway or surface else None
+
+
+def directions(api_key, places, depart=None, steps=False):
     """Ask the Routes API for the driving route through places in order;
-    with depart (a datetime), use the traffic forecast for that time."""
+    with depart (a datetime), use the traffic forecast for that time; with
+    steps, include each leg's turn-by-turn steps."""
     body = {'origin': waypoint(places[0]), 'destination': waypoint(places[-1]),
             'intermediates': [waypoint(p) for p in places[1:-1]], 'travelMode': 'DRIVE'}
     if depart:
@@ -89,7 +132,8 @@ def directions(api_key, places, depart=None):
     else:
         body['routingPreference'] = 'TRAFFIC_UNAWARE'
     response = requests.post(ROUTES_URL, json=body, timeout=60,
-                             headers={'X-Goog-Api-Key': api_key, 'X-Goog-FieldMask': FIELD_MASK})
+                             headers={'X-Goog-Api-Key': api_key,
+                                      'X-Goog-FieldMask': STEPS_FIELD_MASK if steps else FIELD_MASK})
     if not response.ok:
         try:
             message = response.json()['error']['message']
@@ -123,29 +167,29 @@ def decode_polyline(text):
     return points
 
 
-def fetch_batched(api_key, places):
+def fetch_batched(api_key, places, faster=None):
     """One request per 25 stops; no traffic. Returns ([(miles, hours)] per leg, [polyline])."""
     legs, polylines = [], []
     start = 0
     while start < len(places) - 1:
         # Each request ends where the next one starts
         end = min(start + MAX_WAYPOINTS + 1, len(places) - 1)
-        route = directions(api_key, places[start:end + 1])
-        legs += [leg_result(leg) for leg in route['legs']]
+        route = directions(api_key, places[start:end + 1], steps=bool(faster))
+        legs += [leg_result(leg, faster) for leg in route['legs']]
         polylines.append(route['polyline']['encodedPolyline'])
         start = end
     return legs, polylines
 
 
-def fetch_with_traffic(api_key, places, depart, stop_hours, gas_miles, gas_hours, windows):
+def fetch_with_traffic(api_key, places, depart, stop_hours, gas_miles, gas_hours, windows, faster=None):
     """One request per leg, leaving when you'd leave that stop, so each leg
     gets the traffic forecast for its time of day."""
     legs, polylines = [], []
     elapsed = miles = 0
     for n, (a, b) in enumerate(zip(places, places[1:])):
         print(f"\rAsking Google: leg {n + 1} of {len(places) - 1}", end='', file=sys.stderr, flush=True)
-        route = directions(api_key, [a, b], depart + timedelta(hours=elapsed))
-        leg_miles, leg_hours = leg_result(route['legs'][0])
+        route = directions(api_key, [a, b], depart + timedelta(hours=elapsed), steps=bool(faster))
+        leg_miles, leg_hours = leg_result(route['legs'][0], faster)
         legs.append((leg_miles, leg_hours))
         polylines.append(route['polyline']['encodedPolyline'])
         gas = gas_stops(miles + leg_miles, gas_miles) - gas_stops(miles, gas_miles)
@@ -328,6 +372,13 @@ def main():
                              f'or the time of --depart)')
     parser.add_argument('--combos', default='bonus-combos.csv',
                         help='combo bonuses from the rally book (default bonus-combos.csv, if it exists)')
+    parser.add_argument('--highway-faster', type=float, default=0, metavar='PERCENT',
+                        help='drive this many percent faster than Google on highways, or slower if negative '
+                             '(default 0)')
+    parser.add_argument('--surface-faster', type=float, default=0, metavar='PERCENT',
+                        help='the same for every other road (default 0)')
+    parser.add_argument('--highway-mph', type=float, default=HIGHWAY_MPH,
+                        help=f'a step Google drives at this speed or more is highway (default {HIGHWAY_MPH})')
     planRoute.add_gas_args(parser)
     args = parser.parse_args()
 
@@ -338,14 +389,17 @@ def main():
     windows = bonus_windows(args.bonuses, start)
     if args.depart and args.depart.timestamp() < datetime.now().timestamp():
         sys.exit("ERROR: --depart is in the past; Google only forecasts traffic for future times")
+    faster = make_faster(args.highway_faster, args.surface_faster, args.highway_mph)
     api_key = os.environ.get('GMAPS_API_KEY') or sys.exit("ERROR: set GMAPS_API_KEY to your Google Maps API key")
     if args.depart:
         legs, polylines = fetch_with_traffic(api_key, places, args.depart, stop_hours, args.gas_miles, gas_hours,
-                                             windows)
+                                             windows, faster)
         source = f"Google, with traffic, leaving {args.depart:%a %b %d %H:%M}"
     else:
-        legs, polylines = fetch_batched(api_key, places)
+        legs, polylines = fetch_batched(api_key, places, faster)
         source = "Google, no traffic"
+    if faster:
+        source += f", {describe_faster(faster)}"
     combos = planRoute.load_combos(args.combos)
     rows = list(timeline(places, legs, stop_hours, args.gas_miles, gas_hours, windows, combos))
     begin = planRoute.clock_hours(start)

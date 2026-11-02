@@ -433,16 +433,18 @@ def render_run(run, google_error=None, status=200):
     return render_template('run.html', run=run, state=run_state(run), describe=describe,
                            newer=newer, older=older, position=at + 1, total=len(ids),
                            google_error=google_error, google_form=request.form if google_error else {},
+                           highway_mph=checkRoute.HIGHWAY_MPH if GOOGLE_CHECK else None,
                            bonuses=[dict(code=b['code'], lat=b['lat'], lon=b['lon'], points=b['points'])
                                     for b in bonuses]), status
 
 
-def google_check(run, depart, check_id):
+def google_check(run, depart, check_id, faster=None):
     """Check a finished run's route with the Google Maps Routes API, as
     checkRoute.py does, and return the result to save with the run. Without
     depart it's one request with no traffic; with depart (a datetime), one
-    request per leg with Google's traffic forecast. Exits (SystemExit) with a
-    message if Google refuses."""
+    request per leg with Google's traffic forecast. faster drives faster than
+    Google's times, as checkRoute.make_faster makes it. Exits (SystemExit)
+    with a message if Google refuses."""
     settings = run['settings']
     places = [dict(code=leg['code'], lat=leg['lat'], lon=leg['lon'], points=leg['points'], state=leg['state'])
               for leg in run['legs']]
@@ -452,13 +454,15 @@ def google_check(run, depart, check_id):
     stop_hours, gas_hours = settings['stop_minutes'] / 60, settings['gas_minutes'] / 60
     if depart:
         legs, polylines = checkRoute.fetch_with_traffic(GMAPS_API_KEY, places, depart, stop_hours,
-                                                        settings['gas_miles'], gas_hours, windows)
+                                                        settings['gas_miles'], gas_hours, windows, faster)
         source = f"with traffic, leaving {depart:%a %b} {depart.day} {depart:%H:%M}"
         requests_made = len(places) - 1
     else:
-        legs, polylines = checkRoute.fetch_batched(GMAPS_API_KEY, places)
+        legs, polylines = checkRoute.fetch_batched(GMAPS_API_KEY, places, faster)
         source = "no traffic"
         requests_made = math.ceil((len(places) - 1) / (checkRoute.MAX_WAYPOINTS + 1))
+    if faster:
+        source += f", {checkRoute.describe_faster(faster)}"
     rows = list(checkRoute.timeline(places, legs, stop_hours, settings['gas_miles'], gas_hours, windows, combos))
     begin = planRoute.clock_hours(start)
 
@@ -501,12 +505,25 @@ def start_google_check(run_id):
             return render_run(run, "Departure: enter a date and time", 400)
         if depart <= datetime.now(RALLY_TZ):
             return render_run(run, "Departure: Google only forecasts traffic for future times", 400)
+    percents = {}
+    for field in ('highway_faster', 'surface_faster'):
+        try:
+            percents[field] = int(request.form.get(field, '').strip() or 0)
+        except ValueError:
+            return render_run(run, "Faster: enter a whole percent, e.g. 10, or -5 for slower", 400)
+        if not -50 <= percents[field] <= 100:
+            return render_run(run, "Faster: the percents must be from -50 to 100", 400)
+    faster = checkRoute.make_faster(percents['highway_faster'], percents['surface_faster'])
     check_id = f"{depart:%Y%m%d%H%M}" if depart else 'notraffic'
+    if faster:
+        # Letters and digits only, for the GPX link: notrafficH10S5, H10Sm5 for 5% slower
+        check_id += ''.join(f"{letter}{percent}".replace('-', 'm')
+                            for letter, percent in zip('HS', faster[:2]))
     with check_lock:
         # Checked before? Show that one rather than paying Google again
         if check_id not in [check['id'] for check in load_run(run_id).get('checks', [])]:
             try:
-                check = google_check(run, depart, check_id)
+                check = google_check(run, depart, check_id, faster)
             except SystemExit as stop:
                 return render_run(run, str(stop.code).removeprefix('ERROR: '), 502)
             except Exception as error:

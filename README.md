@@ -475,6 +475,21 @@ traffic forecast for that time of day. The time is in your computer's time
 zone unless you add one (`"2026-11-07 07:00-05:00"`), and it must be in the
 future.
 
+**Driving faster than Google.** Google's times are for driving at about the
+usual speed, and Google doesn't take a speed or say what kind of road each
+stretch is. `--highway-faster 10 --surface-faster 5` drives 10% faster on
+highways and 5% faster on every other road (negative for slower). Each leg
+comes back as turn-by-turn steps with their miles and no-traffic time; a
+step Google drives at `--highway-mph` (55) or more counts as highway, and
+its time is divided by 1.10, other steps by 1.05. Any traffic delay in a
+`--depart` check is kept as Google forecasts it. With traffic, the faster
+legs also move the departure time of every later leg. It's the same number
+of requests.
+
+```
+python checkRoute.py --highway-faster 10 --surface-faster 5
+```
+
 **Cost.** One request for a route of up to 25 stops, or one per leg with
 `--depart` (about 20 for a full day). Google gives 5,000 free requests a
 month of the kind that uses traffic or more than 10 stops, and 10,000 of the
@@ -494,6 +509,9 @@ for current numbers.
 | `--start` | 07:00 | Rally start time, for bonus hours (the time of `--depart` if given) |
 | `--combos` | bonus-combos.csv | Combo bonuses, scored when every bonus in one is made |
 | `--gpx` | route-google-DATE-TIME-POINTSpts.gpx | Where to write the GPX file |
+| `--highway-faster` | 0 | Percent faster than Google on highways; negative for slower (-50 to 100) |
+| `--surface-faster` | 0 | The same for every other road |
+| `--highway-mph` | 55 | A step Google drives at this speed or more counts as highway |
 
 ## Provably best route
 
@@ -737,8 +755,10 @@ their hours, whether the day fits, and the `--road-factor` and `--speed`
 that match. The result is saved with the scenario, drawn on the map as
 Google's roads, and has its own GPX download. Leave the departure blank for
 one request without traffic; give a departure (Georgia time) for Google's
-traffic forecast, one request per leg. The same check again shows the saved
-result without asking Google.
+traffic forecast, one request per leg. **Highways % faster** and **Other
+roads % faster** work like `--highway-faster` and `--surface-faster`; each
+mix of departure and percents is its own saved check. The same check again
+shows the saved result without asking Google.
 
 Every check is billed to your Google account, so **leave this off on a
 site the public can reach**. To turn it on, add to `.env` on the server, then
