@@ -36,6 +36,9 @@ GPX_NS = "http://www.topografix.com/GPX/1/1"
 # Atlanta traffic: centered in the I-285 loop, radius covers I-285 (about
 # 10 miles out) plus about 5 more; speed is a guess, change it with --slow-zone
 ATLANTA_SLOW_ZONE = dict(lat=33.78, lon=-84.39, radius=15, mph=25)
+# Downtown Athens and UGA (--athens-slow-zone), fitted to Google's times on
+# 2026 legs: its short in-town hops took about twice the open-road time
+ATHENS_SLOW_ZONE = dict(lat=33.951, lon=-83.376, radius=3, mph=20)
 
 # Each starting route trades points against extra time differently; the
 # search improves every one and keeps the best
@@ -93,6 +96,9 @@ def add_slow_zone_args(parser):
                              '(default: Atlanta, I-285 plus about 5 miles: '
                              f"{','.join(f'{v:g}' for v in ATLANTA_SLOW_ZONE.values())})")
     parser.add_argument('--no-slow-zone', action='store_true', help='turn off the default Atlanta slow zone')
+    parser.add_argument('--athens-slow-zone', action='store_true',
+                        help='add a slow zone for downtown Athens: '
+                             f"{','.join(f'{v:g}' for v in ATHENS_SLOW_ZONE.values())}")
 
 
 def add_gas_args(parser):
@@ -108,9 +114,8 @@ def describe_gas(args):
 
 
 def slow_zones_from_args(args):
-    if args.no_slow_zone:
-        return []
-    return args.slow_zone or [ATLANTA_SLOW_ZONE]
+    zones = [] if args.no_slow_zone else args.slow_zone or [ATLANTA_SLOW_ZONE]
+    return zones + ([ATHENS_SLOW_ZONE] if args.athens_slow_zone else [])
 
 
 def add_first_args(parser):

@@ -76,14 +76,15 @@ NUMBERS = [
 ]
 SWITCHES = [
     ('slow_zone', 'Atlanta slow zone', True, 'inside I-285 plus about 5 miles at 25 MPH'),
+    ('athens_zone', 'Athens slow zone', False, 'about 3 miles around downtown Athens and UGA at 20 MPH'),
     ('use_hours', 'Bonus hours', True, "only count bonuses reached while they're open"),
     ('use_combos', 'Combo bonuses', True, 'add combo points for getting every bonus in one'),
     ('only', 'Only the must-visit bonuses', False, 'route just those, in the quickest order, adding nothing else'),
     ('quick', 'Quick mode', False, 'beam search: about 4x faster and as good on the 2026 bonuses, but it may '
                                    'miss a better route; no front-load'),
 ]
-# How the list of runs describes a switch that's off (only and quick, off by
-# default, are described when on)
+# How the list of runs describes a switch that's off (the Athens zone, only
+# and quick, off by default, are described when on)
 SWITCHED_OFF = {'slow_zone': 'no Atlanta slow zone', 'use_hours': 'bonus hours ignored', 'use_combos': 'no combos'}
 DEFAULTS = {name: default for name, _, default, *_ in NUMBERS} | {name: on for name, _, on, _ in SWITCHES} | {
     'must': '', 'start': planRoute.RALLY_START}
@@ -225,6 +226,8 @@ def describe(settings):
     if settings.get('must'):
         parts.append(f"must visit {settings['must']}")
     parts += [text for name, text in SWITCHED_OFF.items() if not settings[name]]
+    if settings.get('athens_zone'):
+        parts.append('Athens slow zone')
     if settings.get('only'):
         parts.append('only those')
     if settings.get('quick'):
@@ -246,7 +249,8 @@ def plan(run):
     started = time.monotonic()
     try:
         hq, bonuses = planRoute.load_bonuses(BONUS_CSV)
-        slow_zones = [planRoute.ATLANTA_SLOW_ZONE] if settings['slow_zone'] else []
+        slow_zones = (([planRoute.ATLANTA_SLOW_ZONE] if settings['slow_zone'] else [])
+                      + ([planRoute.ATHENS_SLOW_ZONE] if settings.get('athens_zone') else []))
         planner = planRoute.Planner(hq, bonuses, settings['hours'], settings['speed'], settings['stop_minutes'],
                                     settings['road_factor'], settings['front_load'], slow_zones,
                                     settings['gas_miles'], settings['gas_minutes'], settings['start'],

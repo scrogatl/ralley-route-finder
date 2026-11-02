@@ -190,6 +190,7 @@ PyPy.
 | `--gas-minutes` | 10 | Time for each gas stop |
 | `--slow-zone` | Atlanta | `LAT,LON,RADIUS_MILES,MPH`: the part of any leg inside this circle goes at MPH. Repeat for more zones; the default is `33.78,-84.39,15,25` |
 | `--no-slow-zone` | | Turn off the default Atlanta slow zone |
+| `--athens-slow-zone` | off | Add a slow zone for downtown Athens and UGA, `33.951,-83.376,3,20` (see below) |
 | `--max-drop` | 6 | Longest run of stops the search tries removing at once; higher is slower |
 | `--front-load` | 0 | Favor collecting points early, in case the day is cut short (see below) |
 | `--first` | none | Start with these bonuses, in this order, e.g. `CGSH,SMCH` (see below) |
@@ -202,6 +203,29 @@ PyPy.
 | `--ignore-combos` | | Plan without the combo bonuses |
 | `--workers` | all cores | How many CPU cores to search with |
 | `--gpx` | route-DATE-TIME-POINTSpts.gpx | Where to write the GPX file |
+
+### Slow zones
+
+A slow zone is a circle where the planner drives at a lower speed: the part
+of any leg inside it goes at the zone's MPH. The Atlanta zone is on by
+default. It matters even though routes get checked with Google: the check
+reports real road times whatever the zone, but the zone decides which route
+gets planned. On the saved Google checks, legs near Atlanta averaged about
+28 straight-line miles an hour against 39 elsewhere, so without the zone the
+planner would happily route through Atlanta and Google would then say it's
+over time.
+
+`--athens-slow-zone` (the web app's "Athens slow zone" switch) adds 3 miles
+around downtown Athens and UGA at 20 MPH. It's off by default because the
+gain is small. Fitted against Google's times on the 73 different legs in
+the saved checks (scenario H settings), it cut the total error between the
+plan's and Google's leg times from 329 to 308 minutes, mostly by fixing the
+short in-town hops (UGAA to CHST is 4 miles but 16 minutes). The slowest
+Athens legs, between JMBM and Athens, are slow because the roads wind (1.6
+road miles per straight-line mile), which no circle can fix. It leans
+slightly cautious: over those legs it plans 25 minutes more than Google in
+total. That comes from 8 Athens legs on one Saturday morning's forecast, so
+treat it as a rough correction.
 
 ### Front-loading points
 
