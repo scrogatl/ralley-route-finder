@@ -86,8 +86,8 @@
   <div class="table-wrap">
     <table class="route sortable">
       <thead>
-        <tr><th class="num">#</th><th>Bonus</th><th class="num">Points</th><th class="num">Leg mi</th><th class="num">Total mi</th><th class="num">Arrive</th>
-          <th class="num">Leave (h)</th><th class="num">Score</th><th>Notes</th></tr>
+        <tr><th class="num">#</th><th>Bonus</th><th class="num">Points</th><th class="num">Leg mi</th><th class="num">Total mi</th><th class="num" title="the stop's points ÷ the miles driven to reach it">Pts/mi</th>
+          <th class="num">Arrive</th><th class="num">Leave (h)</th><th class="num">Score</th><th>Notes</th></tr>
       </thead>
       <tbody>
         {% for leg in run.legs %}
@@ -97,6 +97,7 @@
             <td class="num">{{ leg.points }}</td>
             <td class="num">{{ leg.leg_miles }}</td>
             <td class="num">{{ leg.miles }}</td>
+            <td class="num">{{ '{:,.0f}'.format(leg.points / leg.leg_miles) if leg.points and leg.leg_miles else '' }}</td>
             <td class="num" data-sort="{{ leg.leave }}">{{ leg.arrive }}</td>
             <td class="num">{{ '%.2f' % leg.leave }}</td>
             <td class="num">{{ '{:,}'.format(leg.score) }}</td>
@@ -141,7 +142,8 @@
         <table class="route sortable">
           <thead>
             <tr><th class="num">#</th><th>Bonus</th><th class="num">Points</th><th class="num">Line mi</th>
-              <th class="num">Road mi</th><th class="num">Total mi</th><th class="num">Drive min</th>
+              <th class="num">Road mi</th><th class="num">Total mi</th>
+              <th class="num" title="the stop's points ÷ the road miles driven to reach it">Pts/mi</th><th class="num">Drive min</th>
               <th class="num">Arrive</th><th class="num">Score</th><th>Notes</th></tr>
           </thead>
           <tbody>
@@ -153,6 +155,7 @@
                 <td class="num">{{ row.line_miles }}</td>
                 <td class="num">{{ row.road_miles }}</td>
                 <td class="num">{{ row.miles }}</td>
+                <td class="num">{{ '{:,.0f}'.format(row.points / row.road_miles) if row.points and row.road_miles and not row.missed else '' }}</td>
                 <td class="num">{{ row.drive }}</td>
                 <td class="num" data-sort="{{ row.leave }}">{{ row.arrive }}</td>
                 <td class="num">{{ '{:,}'.format(row.score) }}</td>
