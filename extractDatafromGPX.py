@@ -1,22 +1,57 @@
 #!/usr/bin/env python
-import re, sys
+"""
+Combine the rally's bonus files into the files the planners read.
+
+Takes each bonus's location from the rally's GPX file (the CSV's lat/lon may
+be wrong) and its points from the rally's bonus CSV, and writes, in the
+current directory, overwriting any earlier ones:
+
+  bonus-lat-lon-points.csv  code, lat, lon, points, state, and with the rally
+                            book, the hours each bonus is open
+  bonus-combos.csv          with the rally book only: each combo's code,
+                            points and the bonuses it needs
+  bonus-lat-lon-points.gpx  the GPX with each bonus's points (and hours and
+                            combos) in its name and description, for viewing
+                            in BaseCamp, a GPS or GPX Studio
+
+Without the rally book, the CSV has no hours and bonus-combos.csv isn't
+written (an old one is left as it was). Check the warnings: a bonus with no
+points in the CSV, or no hours in the rally book, is flagged.
+
+    python extractDatafromGPX.py "SNAFU_2026/2026 SNAFU Bonus_Code-Lat-Long-Points_CSV - Final - 26 Oct 2026.csv" \\
+        "SNAFU_2026/SNAFU 2026 - MASTER cao 11 Aug 26.gpx" "SNAFU_2026/2026 SNAFU Rally Book - Final 27 Oct 26.pdf"
+"""
+import argparse, os, re, sys
 import xml.etree.ElementTree as ET
 import pandas as pd
 
-# sleep_time = os.environ.get('SLEEP_TIME', "1000")
-
-
-csv_file_path =  sys.argv[1]
+parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+parser.add_argument('points_csv',
+                    help="the rally's bonus CSV: code, lat, lon, points per row (only the code and points are used; "
+                         "UTF-8 or Windows encoding)")
+parser.add_argument('gpx_file', help="the rally's GPX file of bonus waypoints, including Rally HQ")
+parser.add_argument('rally_book', nargs='?',
+                    help="optional: the rally book PDF, for each bonus's opening hours and the combo bonuses")
+args = parser.parse_args()
+for path in filter(None, (args.points_csv, args.gpx_file, args.rally_book)):
+    if not os.path.isfile(path):
+        sys.exit(f"ERROR: no such file: {path}")
+csv_file_path, gpx_file_path, rally_book_path = args.points_csv, args.gpx_file, args.rally_book
 
 # Read the CSV file into a pandas DataFrame
 # file has the points for each bonus, not in the GPX file
-csvDataFrame = pd.read_csv(csv_file_path,  header=None)
+csvDataFrame = None
+# Saved from Excel it may be in Windows encoding, not UTF-8 (the final 2026
+# file has ° in its coordinates); latin-1 reads any bytes, so it's last
+for encoding in ('utf-8', 'cp1252', 'latin-1'):
+    try:
+        csvDataFrame = pd.read_csv(csv_file_path, header=None, encoding=encoding)
+        break
+    except UnicodeDecodeError:
+        continue
 
 # Exact-match lookup of points by bonus code
 points_by_code = dict(zip(csvDataFrame[0].astype(str).str.strip(), csvDataFrame[3]))
-
-# Optional third argument: the rally book PDF, for the hours each bonus is open
-rally_book_path = sys.argv[3] if len(sys.argv) > 3 else None
 
 # "Available: 24 hours" or "Available: 11:00 AM – 1:00 PM" in the rally book
 AVAILABLE = re.compile(r"Available:\s*(?:(24\s*hours?)|(\d{1,2}:\d{2}\s*[AP]M)\s*[–-]\s*(\d{1,2}:\d{2}\s*[AP]M))",
@@ -150,11 +185,11 @@ GPXX_STATE_TAG = GPXX_NAMESPACE + "State"
 WPTX1_STATE_TAG = WPTX1_NAMESPACE + "State"
 
 # Keep the GPX file's own namespace prefixes when writing it back out
-for _, (prefix, uri) in ET.iterparse(sys.argv[2], events=['start-ns']):
+for _, (prefix, uri) in ET.iterparse(gpx_file_path, events=['start-ns']):
     ET.register_namespace(prefix, uri)
 
 # Load GPX file with working lat-lons
-tree = ET.parse(sys.argv[2])
+tree = ET.parse(gpx_file_path)
 root = tree.getroot()
 
 def is_rally_hq(code):
@@ -198,7 +233,7 @@ def set_symbol(bonus, points):
 # Rally HQ is the start/finish of every route, so the GPX must have it
 hq_names = [w.findtext(NAME_TAG, '').strip() for w in root.findall(WPT_TAG)]
 if not any(is_rally_hq(name) for name in hq_names):
-    sys.exit(f"ERROR: no 'Rally HQ' waypoint found in {sys.argv[2]}")
+    sys.exit(f"ERROR: no 'Rally HQ' waypoint found in {gpx_file_path}")
 
 # Create merged file with lat-lon from GPX and bonus 
 #   details from CSV file
