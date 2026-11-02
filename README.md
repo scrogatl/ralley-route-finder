@@ -285,16 +285,68 @@ around Statesboro (BISH, LOGS, FABF and others), but it's about 160 road
 miles from HQ: an 8-hour route forced to start there (`--first LOGS`) scores
 6,171 against 8,108 without, because the round trip eats over 5 hours.
 
+### The planner in plain terms
+
+The planner works in two layers: fixed **rules** that decide whether a
+route is allowed, and **rules of thumb** for finding a good allowed route.
+It can't try every possible route; there are far too many.
+
+**Rules every route follows**
+
+- Start and finish at Rally HQ, within the time budget.
+- Driving time is straight-line miles × the road factor, at the average
+  speed, and 25 MPH through the Atlanta slow zone.
+- Each bonus costs the stop minutes for its photo, plus a gas stop each time
+  the miles pass another "gas every" distance.
+- A bonus reached before it opens is waited for; one that would be reached
+  after it closes can't be in the route.
+- A combo's points count only if every bonus in it is visited.
+- First stops and must-visit bonuses, if set, are always kept. With "only",
+  nothing else is added.
+
+**How the full search looks for a good route**
+
+1. **Build greedily.** Keep adding the bonus worth the most points per extra
+   hour of detour, slotted in where it costs the least time, until nothing
+   more fits. The last missing bonus of a combo counts the combo's points.
+2. **Try many starts.** Repeat that from every bonus on its own, leaning
+   five ways from "nearby small bonuses" to "big ones farther away", and
+   from routes that already hold whole combos: several hundred starts.
+3. **Untangle.** Reverse any stretch of the route that cuts driving time,
+   such as where it crosses itself.
+4. **Drop and rebuild.** Remove every run of 1 to 6 stops in a row, refill
+   the gap greedily, and keep any change that scores more.
+5. **Swap.** Try replacing each stop with each bonus not in the route.
+6. **Pick the winner.** Most points wins; then the route that collects them
+   sooner; then the one that takes less time.
+7. **Bank points early.** Reorder the same stops to collect points earlier
+   where the hours allow (with front-load set, it will even give up some
+   total points for that).
+
+**How quick mode searches** (`--quick`, or the web app's switch): it builds
+routes one stop at a time, keeping only the 2,000 most promising at each
+step (points so far, plus 40% of an optimistic guess at what's still
+reachable), and tries only the 12 most attractive next stops from each. It
+finishes with the same drop-and-rebuild as step 4. It's faster because it
+never reworks whole routes, but it can miss a route behind a stop that
+doesn't look attractive yet. See [Tree search](#tree-search-beam-and-depth-first).
+
+**What none of this knows about:** real roads (hence the road factor, and
+the Google check), weather, rest breaks, or how long a photo really takes;
+those go into the speed, road factor and stop minutes.
+
 ### How the search works
 
-`planRoute.py` builds a route by adding bonuses one at a time, then keeps
-trying changes to it and keeps any change that scores higher. It repeats
-this from many different starting points and returns the best result. There
-is no randomness, so the same inputs always give the same route.
+The same search in detail. `planRoute.py` builds a route by adding bonuses
+one at a time, then keeps trying changes to it and keeps any change that
+scores higher. It repeats this from many different starting points and
+returns the best result. There is no randomness, so the same inputs always
+give the same route.
 
 **Scoring.** A route's time is its driving time (straight-line miles × road
 factor ÷ speed, slower inside a slow zone), plus the stop at each bonus, plus
-the gas stops. A route over the time budget is rejected. Its value is its
+the gas stops, plus any wait for a bonus to open. A route over the time
+budget, or reaching a bonus after it closes, is rejected. Its value is its
 total points, including any combos it completes, plus the early-arrival
 credit when `--front-load` is above 0.
 When two routes are compared, the higher value wins; on a tie, the one that
@@ -326,8 +378,11 @@ collects its points sooner; then the one that takes less time.
    weights 0.5, 0.75, 1, 1.5 and 2, which is about 675 runs for 2026. Adding
    one bonus at a time rarely builds a whole combo, so it also starts from
    each set of combos whose bonuses fit in the day together, a route through
-   all of them. The
-   runs are spread across all CPU cores and their results are compared in a
+   all of them. With `--must`, every start already has the must-visit
+   bonuses, each placed where it adds the least time (or, if that doesn't
+   fit, in the quickest of all their orders), and no change may drop one;
+   `--only` skips the search and returns just those. The runs are spread
+   across all CPU cores and their results are compared in a
    fixed order, so the winner doesn't depend on how many cores there are.
 5. **Polish the winner.** Alternate a swap search (`swap_search`: replace
    each stop with each unvisited bonus, then refill) with step 3 until
