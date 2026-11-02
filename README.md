@@ -447,6 +447,104 @@ be safe, so it could rule out a route that fits with less than a second to
 spare. If `planRoute.py` finds such a route scoring more, it reports that
 route instead, marked `NOT PROVEN`.
 
+## Tree search (beam and depth-first)
+
+`planRouteSearch.py` is a third way to plan the same route, the
+old-school AI way: a search tree. A route is built one stop at a time from
+Rally HQ. Each partial route is a node, and its children are the same route
+with one more bonus that still leaves time to get back. It takes the same
+options as `planRoute.py` (bonus hours, gas stops, slow zones, combos,
+`--first`, `--must`) except `--front-load`, prints the same table, and
+writes `route-search-DATE-TIME-POINTSpts.gpx`. Like `planRoute.py`, it's much
+faster under PyPy.
+
+```bash
+python planRouteSearch.py                          # beam search, about 5 seconds
+python planRouteSearch.py --widen --time-limit 120 # wider and wider beams for 2 minutes
+python planRouteSearch.py --method dfs --branch 0 --hours 6   # prove the best 6-hour route
+```
+
+Each node is scored f = g + h-weight × h. g is the points so far, including
+any combos completed. h is the most points the rest of the day could still
+add: the bonuses still reachable, packed best points per hour first into
+the time left, as if each cost only its stop plus the quickest drive into it
+(a "fractional knapsack"). A combo's points are shared among the stops it
+still needs. h ignores gas stops and waits, so it is never too low.
+
+Two methods:
+
+- **Beam search** (`--method beam`, the default). Grow every route in the
+  frontier by one stop, then keep only the `--beam-width` best by f (2,000),
+  at most `--diversity` of them ending at the same bonus (a tenth of the
+  width), so the beam doesn't fill up with variations on one route. Of routes
+  with the same stops ending at the same bonus, only the quickest is kept.
+  `--widen` reruns at double the width until `--time-limit`. The growing is
+  spread over all CPU cores, and the result doesn't depend on how many.
+- **Depth-first branch and bound** (`--method dfs`). Follow the most
+  promising next stop first, all the way to the end of the day, then back up
+  and try the next. Any branch whose f can't beat the best route found so far
+  is cut off. It starts from a beam search's best route so it can cut from
+  the start (`--beam-width 0` starts from nothing), and stops at
+  `--time-limit` (60 seconds).
+
+The cut-offs:
+
+- `--branch` (12): only the 12 best next stops from each node are tried, by
+  points per hour of getting there. Lower is faster and greedier; 0 tries
+  them all.
+- `--h-weight` (0.4 for beam, 1 for dfs): how much h counts. In a beam,
+  lower ranks routes more by points already collected, which did better
+  here. In depth-first, 1 is safe; below 1 cuts off more, finishing sooner
+  but possibly missing the best route.
+
+With `--method dfs --branch 0` and h-weight 1, nothing is cut off that could
+do better, so if it finishes before the time limit, no route scores more. It
+prints `no route scores more` when that happens. With default settings it
+proves the same bests as `planRouteExact.py`, often faster:
+
+| Day | Proven best | `planRouteSearch.py` | `planRouteExact.py` |
+| --- | --- | --- | --- |
+| 4 h, bonus hours | 2,974 | 1 s | 7 s |
+| 5 h, bonus hours | 3,661 | 6 s | 3 min |
+| 6 h, bonus hours | 5,253 | 34 s | 8 min |
+| 6 h, `--ignore-hours` | 5,658 | 1 min | 1 min |
+
+From 7 hours on it didn't finish in 15 minutes. It also uses about 2 GB of
+memory by then (1 GB at 6 hours), for the table of routes it has already
+seen.
+
+How it compares with `planRoute.py` (8,667 points in about 40 seconds for
+scenario H, `--road-factor 1.22 --speed 46 --stop-minutes 4`; 8,108 for the
+web test, `--hours 8 --speed 60 --stop-minutes 8 --road-factor 1.25 --start
+08:00 --gas-miles 200 --no-slow-zone`), on 8 cores under PyPy:
+
+| Settings | H | Time | Web test | Time |
+| --- | --- | --- | --- | --- |
+| beam, width 100, branch 5 | 8,478 | 1 s | 7,967 | 1 s |
+| beam, width 1,000, branch 10 | 8,592 | 4 s | 8,108 | 3 s |
+| beam, width 1,000, branch 10, no diversity limit | 8,531 | 4 s | 8,108 | 3 s |
+| beam, width 1,000, branch 10, h-weight 1 | 8,432 | 4 s | 7,835 | 4 s |
+| beam, defaults (width 2,000, branch 12) | **8,667** | 5 s | **8,108** | 5 s |
+| beam, defaults, 1 core | 8,667 | 9 s | 8,108 | 8 s |
+| beam, width 5,000 | 8,667 | 10 s | 8,108 | 8 s |
+| beam, `--widen` from 1,000, 60 s | 8,667 | 41 s | 8,108 | 38 s |
+| dfs from the default beam, 60 s | 8,667 | 66 s | 8,108 | 65 s |
+| dfs from nothing, branch 8 (finished) | 8,592 | 52 s | 8,108 | 41 s |
+
+So the default beam search matches `planRoute.py` on both, in about an
+eighth of the time, but doesn't beat it: neither did `planRouteExact.py` in
+30 minutes on H. Searching longer (wider beams, depth-first from the beam's
+route) found nothing better. `--polish` runs `planRoute.py`'s
+drop-and-reinsert search on the result; it lifts narrow beams a little
+(8,478 to 8,502 on H, 7,967 to 8,089 on the web test) but found nothing to
+add to the default's routes.
+
+**Limits.** The `--branch` cut-off ranks next stops by points per hour, which
+can't see a cluster behind a small stop: on H, the 8,667 route's fifth stop
+is only the 11th best by that measure, so branch 10 can never find it.
+Ranking by f, or looking one more stop ahead, did no better. Tuned on the
+2026 bonuses only; other maps may want other settings.
+
 ## Web app
 
 `webapp/` is a small password-protected website where others can run
