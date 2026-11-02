@@ -29,7 +29,7 @@ from zoneinfo import ZoneInfo
 from flask import Flask, Response, abort, redirect, render_template, request, send_file, url_for
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
-import planRoute
+import planRoute, planRouteSearch
 
 PASSWORD = os.environ.get('APP_PASSWORD') or sys.exit("ERROR: set APP_PASSWORD to the site's password")
 DATA_DIR = os.environ.get('DATA_DIR') or os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
@@ -63,8 +63,11 @@ SWITCHES = [
     ('slow_zone', 'Atlanta slow zone', True, 'inside I-285 plus about 5 miles at 25 MPH'),
     ('use_hours', 'Bonus hours', True, "only count bonuses reached while they're open"),
     ('use_combos', 'Combo bonuses', True, 'add combo points for getting every bonus in one'),
+    ('quick', 'Quick mode', False, 'beam search: about 4x faster and as good on the 2026 bonuses, but it may '
+                                   'miss a better route; no front-load'),
 ]
-# How the list of runs describes a switch that's off
+# How the list of runs describes a switch that's off (quick mode, off by
+# default, is described when it's on)
 SWITCHED_OFF = {'slow_zone': 'no Atlanta slow zone', 'use_hours': 'bonus hours ignored', 'use_combos': 'no combos'}
 DEFAULTS = {name: default for name, _, default, *_ in NUMBERS} | {name: on for name, _, on, _ in SWITCHES} | {
     'must': '', 'start': planRoute.RALLY_START}
@@ -164,6 +167,8 @@ def read_form(form):
     except argparse.ArgumentTypeError as error:
         raise ValueError(f"Rally start: {error}")
     settings['must'] = ','.join(code.strip().upper() for code in form.get('must', '').split(',') if code.strip())
+    if settings['quick'] and settings['front_load']:
+        raise ValueError("Quick mode: set Front-load to 0, since quick mode doesn't support it")
     return settings
 
 
@@ -184,6 +189,8 @@ def describe(settings):
     if settings.get('must'):
         parts.append(f"must visit {settings['must']}")
     parts += [text for name, text in SWITCHED_OFF.items() if not settings[name]]
+    if settings.get('quick'):
+        parts.append('quick mode')
     return ', '.join(parts)
 
 
@@ -204,7 +211,10 @@ def plan(run):
         # The planner stops with sys.exit on bad input, e.g. an unknown --must code
         planRoute.apply_first(planner, args)
         planRoute.apply_combos(planner, args)
-        route = planner.solve(planRoute.START_WEIGHTS, 6, WORKERS)
+        if settings.get('quick'):
+            route = planRouteSearch.quick_route(planner, WORKERS)
+        else:
+            route = planner.solve(planRoute.START_WEIGHTS, 6, WORKERS)
     except SystemExit as stop:
         run.update(status='error', error=str(stop.code).removeprefix('ERROR: ').replace('--must', 'Must visit')
                    .replace('--first', 'First stops'))
@@ -223,7 +233,9 @@ def plan(run):
                hours=round(legs[-1].hours, 2),
                settings_lines=[f"{len(bonuses)} bonuses, {planRoute.describe_gas(args)}, "
                                f"{planRoute.describe_slow_zones(slow_zones)}, {planRoute.describe_first(planner)}",
-                               planRoute.describe_hours(planner), planRoute.describe_combos(planner)],
+                               planRoute.describe_hours(planner), planRoute.describe_combos(planner)]
+                              + (["Quick mode: beam search (width 2000, branch 12), then planRoute.py's "
+                                  "drop-and-reinsert search"] if settings.get('quick') else []),
                summary=planRoute.summary_lines(planner, route, legs),
                legs=[dict(code=leg.place['code'], state=leg.place['state'], points=leg.place['points'],
                           lat=leg.place['lat'], lon=leg.place['lon'], leg_miles=round(leg.leg_miles, 1),

@@ -1,5 +1,6 @@
 *
 !planRoute.py
+!planRouteSearch.py
 !checkRoute.py
 !webapp/
 webapp/__pycache__/

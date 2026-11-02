@@ -5,7 +5,7 @@ FROM pypy:3.11-7.3.20-slim
 WORKDIR /app
 COPY webapp/requirements.txt webapp/requirements.txt
 RUN pip install --no-cache-dir -r webapp/requirements.txt
-COPY planRoute.py checkRoute.py ./
+COPY planRoute.py planRouteSearch.py checkRoute.py ./
 COPY webapp webapp
 
 # The bonus files are mounted at /data; runs are saved in /results

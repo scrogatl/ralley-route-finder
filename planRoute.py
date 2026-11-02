@@ -948,6 +948,9 @@ def main():
                              '(default 0)')
     parser.add_argument('--workers', type=int, default=os.cpu_count(),
                         help=f'CPU cores to search with (default all, {os.cpu_count()} here)')
+    parser.add_argument('--quick', action='store_true',
+                        help="plan with planRouteSearch.py's beam search instead: about 4x faster and as good "
+                             "on the 2026 bonuses, but may miss a better route on other data; no --front-load")
     parser.add_argument('--gpx',
                         help='also write the route as GPX for Garmin BaseCamp and GPS units '
                              '(default route-DATE-TIME-POINTSpts.gpx)')
@@ -964,10 +967,16 @@ def main():
                       slow_zones, args.gas_miles, args.gas_minutes, args.start, not args.ignore_hours)
     apply_first(planner, args)
     apply_combos(planner, args)
-    route = planner.solve(START_WEIGHTS, args.max_drop, max(1, args.workers))
+    if args.quick:
+        if args.front_load:
+            sys.exit("ERROR: --quick doesn't support --front-load")
+        import planRouteSearch
+        route = planRouteSearch.quick_route(planner, max(1, args.workers))
+    else:
+        route = planner.solve(START_WEIGHTS, args.max_drop, max(1, args.workers))
     print(f"{len(bonuses)} bonuses, {args.hours} hours at {args.speed} MPH, "
           f"{args.stop_minutes:g} min per stop, road factor {args.road_factor:g}, "
-          f"front-load {args.front_load:g}")
+          f"front-load {args.front_load:g}" + (", quick (beam search)" if args.quick else ""))
     print(f"{describe_gas(args)}, {describe_slow_zones(slow_zones)}, {describe_first(planner)}")
     print(f"{describe_hours(planner)}")
     print(f"{describe_combos(planner)}\n")

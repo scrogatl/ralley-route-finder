@@ -44,7 +44,7 @@ runs planRoute.py's drop-and-reinsert search on the result.
 """
 import argparse, collections, multiprocessing, os, sys, time
 import planRoute
-from planRoute import Planner, load_bonuses, progress, clock
+from planRoute import Planner, load_bonuses, clock
 
 # A partial route from Rally HQ. elapsed is the hours after leaving its last
 # stop, miles the distance so far, points its score (bonuses plus combos it
@@ -54,6 +54,9 @@ Node = collections.namedtuple('Node', 'route last elapsed miles points stops')
 # Beam search's default weight on h. Lower ranks partial routes more by the
 # points they already have; this did best on the 2026 bonuses
 BEAM_H_WEIGHT = 0.4
+# planRoute.py --quick and the web app's quick mode: the beam search that did
+# best on the 2026 bonuses, then planRoute.py's drop-and-reinsert search
+QUICK_WIDTH, QUICK_BRANCH = 2000, 12
 
 # Depth-first search remembers this many (last stop, stops) states for
 # dominance pruning, then starts over, to bound its memory
@@ -275,7 +278,7 @@ class TreeSearch:
                             break
             else:
                 frontier = [c for _, _, c in scored[:width]]
-            progress(f"Beam search: depth {depth}, {len(kept):,} routes, kept {len(frontier):,}, "
+            planRoute.progress(f"Beam search: depth {depth}, {len(kept):,} routes, kept {len(frontier):,}, "
                      f"best so far {best.points if best else 0} points, {clock(time.monotonic() - started)} elapsed")
         print(file=sys.stderr)
         self.last_seconds = time.monotonic() - started
@@ -292,7 +295,7 @@ class TreeSearch:
             if node is not None and self.better(node, best):
                 best = node
             spent = time.monotonic() - started
-            progress(f"Width {width:,} done: best so far {best.points if best else 0} points, "
+            planRoute.progress(f"Width {width:,} done: best so far {best.points if best else 0} points, "
                      f"{clock(spent)} elapsed\n")
             # The next pass takes about twice as long as this one
             if spent + 2 * self.last_seconds > time_limit:
@@ -319,7 +322,7 @@ class TreeSearch:
             if visits[0] % 1000 == 0:
                 elapsed = time.monotonic() - started
                 stopped[0] = elapsed > time_limit
-                progress(f"Depth-first: {self.nodes:,} nodes, best so far "
+                planRoute.progress(f"Depth-first: {self.nodes:,} nodes, best so far "
                          f"{best[0].points if best[0] else 0} points, {clock(elapsed)} elapsed")
             for child in self.children(node):
                 if stopped[0]:
@@ -340,6 +343,33 @@ class TreeSearch:
 
 # Each worker process gets its own copy of the search once, as in planRoute.py
 _worker_search = None
+
+
+def quick_route(planner, workers):
+    """A route by beam search with the defaults (width 2000, branch 12),
+    polished with planRoute.py's drop-and-reinsert search and ordered to bank
+    points early: about 4x faster than Planner.solve, and as good on the 2026
+    bonuses, but it may miss a better route on other data."""
+    search = TreeSearch(planner, QUICK_BRANCH, BEAM_H_WEIGHT, QUICK_WIDTH // 10)
+    if workers > 1:
+        search.pool = multiprocessing.Pool(workers, initializer=_init_worker, initargs=(search,))
+        search.workers = workers
+    try:
+        best = search.beam(QUICK_WIDTH)
+    finally:
+        if search.pool:
+            search.pool.close()
+    if best is None:
+        sys.exit("ERROR: found no route with every --must stop")
+    planRoute.progress(f"Polishing the beam search's {best.points}-point route")
+    route = planner.local_search(planner.improve(list(best.route)), 1.0, 6)
+    route = planner.front_load_order(route)
+    planRoute.progress(f"Search done: {planner.route_points(route)} points")
+    print(file=sys.stderr)
+    if (len(set(route)) != len(route) or planner.route_hours(route) > planner.max_hours + 1e-9
+            or route[:len(planner.lead)] != planner.lead or not planner.required <= set(route)):
+        sys.exit("ERROR: search produced an invalid route; this is a bug")
+    return route
 
 
 def _init_worker(search):
@@ -431,7 +461,7 @@ def main():
     if found != best.points:
         sys.exit(f"ERROR: search scored its route {best.points} points, but it's {found}; this is a bug")
     if args.polish:
-        progress("Polishing with planRoute.py's drop-and-reinsert search")
+        planRoute.progress("Polishing with planRoute.py's drop-and-reinsert search")
         route = planner.local_search(planner.improve(route), 1.0, 6)
         print(file=sys.stderr)
     polish_seconds = time.monotonic() - started - seconds

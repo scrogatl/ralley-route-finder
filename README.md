@@ -194,6 +194,7 @@ PyPy.
 | `--front-load` | 0 | Favor collecting points early, in case the day is cut short (see below) |
 | `--first` | none | Start with these bonuses, in this order, e.g. `CGSH,SMCH` (see below) |
 | `--must` | none | Visit these bonuses, in whatever order fits best (see below) |
+| `--quick` | off | Plan with the beam search instead: about 4x faster, as good on the 2026 bonuses (see [Tree search](#tree-search-beam-and-depth-first)) |
 | `--start` | 07:00 | Rally start time, for the hours bonuses are open |
 | `--ignore-hours` | | Plan as if every bonus is open all day |
 | `--combos` | bonus-combos.csv | Combo bonuses from the rally book, used if the file exists |
@@ -544,6 +545,20 @@ can't see a cluster behind a small stop: on H, the 8,667 route's fifth stop
 is only the 11th best by that measure, so branch 10 can never find it.
 Ranking by f, or looking one more stop ahead, did no better. Tuned on the
 2026 bonuses only; other maps may want other settings.
+
+**Quick mode.** `planRoute.py --quick`, and the web app's Quick mode switch,
+plan with the default beam search followed by `planRoute.py`'s
+drop-and-reinsert search, in place of the full search. Timed one after the
+other on this 8-core machine, including start-up:
+
+| | Full search | `--quick` |
+|---|---|---|
+| H | 8,667 in 30 s | 8,667 in 8 s |
+| Web test | 8,108 in 21 s | 8,108 in 5 s |
+
+It's a fast first look; for the route you'll ride, run the full search too,
+since on other data the beam may miss what the full search finds. It doesn't
+do `--front-load`.
 
 ## Web app
 
