@@ -775,6 +775,17 @@ browser script, and every page includes it. Any other
 setting can be given as a `NEW_RELIC_*` environment variable in
 `docker-compose.yml`. Remove the key to turn it off.
 
+While New Relic is on, the app also sends a heartbeat every minute (the
+metrics `Custom/Heartbeat/QueuedRuns` and `Custom/Heartbeat/Running`), so it
+keeps reporting when nobody's using the site.
+
+**Uptime checks.** `https://DOMAIN/health` answers without the password:
+`{"status": "ok"}`, or status 503 and `{"status": "planner stopped"}` if the
+thread that runs the planner has died (restart with `docker compose restart
+app`). Point New Relic Synthetics, or any ping monitor, at it rather than at
+the home page, which needs the password. It says nothing else about the
+site, and New Relic leaves its requests out of the app's statistics.
+
 ### Trying it locally
 
 ```bash

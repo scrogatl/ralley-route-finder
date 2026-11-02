@@ -122,6 +122,9 @@ class Stopped(Exception):
 
 @app.before_request
 def check_password():
+    # Uptime monitors check /health without the password; it tells them nothing else
+    if request.path == '/health':
+        return None
     auth = request.authorization
     if not auth or not hmac.compare_digest((auth.password or '').encode(), PASSWORD.encode()):
         return Response('Password required', 401, {'WWW-Authenticate': 'Basic realm="Rally route finder"'})
@@ -333,7 +336,34 @@ def worker():
 for waiting in sorted((run for run in all_runs() if run['status'] in ('queued', 'running')),
                       key=lambda run: run['created']):
     jobs.put(waiting['id'])
-threading.Thread(target=worker, daemon=True).start()
+worker_thread = threading.Thread(target=worker, daemon=True)
+worker_thread.start()
+
+
+def heartbeat():
+    """Report to New Relic every minute, so the app keeps reporting when
+    nobody's using it: runs waiting, and whether one is running."""
+    while True:
+        time.sleep(60)
+        application = newrelic.agent.application()
+        newrelic.agent.record_custom_metric('Custom/Heartbeat/QueuedRuns', jobs.qsize(), application=application)
+        newrelic.agent.record_custom_metric('Custom/Heartbeat/Running', 1 if progress else 0, application=application)
+
+
+if NEW_RELIC:
+    threading.Thread(target=heartbeat, daemon=True).start()
+
+
+@app.get('/health')
+def health():
+    """For uptime monitors: 200 while the app can plan runs, 503 if the
+    thread that runs the planner has died."""
+    if NEW_RELIC:
+        # A monitor checking every minute shouldn't swamp the real traffic
+        newrelic.agent.ignore_transaction()
+    if not worker_thread.is_alive():
+        return {'status': 'planner stopped'}, 503
+    return {'status': 'ok'}
 
 
 @app.get('/')
