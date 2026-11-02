@@ -62,6 +62,7 @@
                   {% if run.status == 'done' %}<a href="{{ url_for('show_run', run_id=run.id) }}"><strong>{{ '{:,}'.format(run.points) }}</strong></a>
                   {% elif run.status == 'error' %}<a href="{{ url_for('show_run', run_id=run.id) }}">error</a>
                   {% else %}<a href="{{ url_for('show_run', run_id=run.id) }}">{{ run.status }}…</a>{% endif %}
+                  {% if run.checks %}<br><small class="muted" title="{{ run.checks[0].source }}">Google {{ '{:,}'.format(run.checks[0].points) }}</small>{% endif %}
                 </td>
                 <td class="num">{{ run.stops if run.status == 'done' else '' }}</td>
                 <td class="num">{{ run.hours if run.status == 'done' else '' }}</td>

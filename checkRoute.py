@@ -210,6 +210,57 @@ def timeline(places, legs, stop_hours, gas_miles, gas_hours, windows, combos=())
         yield Row(place, leg_miles, miles, leg_hours, arrive, wait, hours, score, gas, missed, completed)
 
 
+def row_notes(row, windows):
+    """Notes for one stop: gas stops on the way, its hours and any combo it completes."""
+    notes = []
+    if row.gas:
+        notes.append(f"+ {row.gas} gas stop{'s' if row.gas > 1 else ''} on the way")
+    window = windows.get(row.place['code'])
+    if row.missed:
+        notes.append(f"MISSED: closes {window[3]}")
+    elif row.wait:
+        notes.append(f"waits {row.wait * 60:.0f} min to open at {window[2]}")
+    elif window:
+        notes.append(f"open {window[2]}-{window[3]}")
+    notes += [f"completes {code} combo +{points}" for code, points in row.combos]
+    return notes
+
+
+def summary_lines(places, legs, rows, windows, combos, max_hours, gas_miles, time_of_day):
+    """The lines under the table: totals, missed hours, combos, whether it
+    fits, and the --road-factor and --speed that match Google's numbers."""
+    last = rows[-1]
+    miles, hours, points = last.miles, last.arrive, last.score
+    line_miles = sum(planRoute.haversine_miles(a, b) for a, b in zip(places, places[1:]))
+    drive_hours = sum(h for _, h in legs)
+    lines = [f"Bonuses: {len(places) - 2}   Points: {points}   Road miles: {miles:.0f}   "
+             f"Gas stops: {gas_stops(miles, gas_miles)}   Hours: {hours:.2f} of {max_hours}"]
+    missed = [row for row in rows if row.missed]
+    if missed:
+        lost = sum(row.place['points'] for row in missed)
+        lines.append(f"MISSED HOURS: " + ", ".join(f"{row.place['code']} (arrive {time_of_day(row.arrive)}, "
+                                                   f"closes {windows[row.place['code']][3]})" for row in missed)
+                     + f"; {lost} points not counted")
+    if combos:
+        done = [combo for row in rows for combo in row.combos]
+        planned = {p['code'] for p in places}
+        # Combos the plan had every bonus of, lost to a missed bonus
+        lost = [code for code, _, members in combos
+                if planned.issuperset(members) and code not in {c for c, _ in done}]
+        lines.append("Combos: " + (", ".join(f"{code} +{points}" for code, points in done) or "none")
+                     + (f"; LOST to missed hours: {', '.join(lost)}" if lost else ''))
+    if hours <= max_hours:
+        lines.append(f"FITS: back at Rally HQ with {(max_hours - hours) * 60:.0f} minutes to spare")
+    else:
+        late = [row.place['code'] for row in rows[1:-1] if row.leave > max_hours]
+        lines.append(f"OVER by {(hours - max_hours) * 60:.0f} minutes. Stops you'd leave after time runs out: "
+                     f"{', '.join(late) or 'none (only the drive back is late)'}")
+    if line_miles and drive_hours:
+        lines.append(f"To plan closer to these roads: planRoute.py --road-factor {miles / line_miles:.2f} "
+                     f"--speed {miles / drive_hours:.0f}")
+    return lines
+
+
 def write_gpx(rows, polylines, max_hours, source, gpx_file_path):
     """The stops as waypoints and a route, as planRoute.py writes them but with
     Google's times, plus a track along the roads Google chose."""
@@ -308,55 +359,18 @@ def main():
           + (f"bonus hours from {args.bonuses}" if windows else "no bonus hours") + "\n")
     print(f"{'#':>3}  {'Bonus':<24} {'State':<5} {'Points':>6} {'Line mi':>7} {'Road mi':>7} {'Total mi':>8} {'Drive':>6} "
           f"{'Arrive':>6} {'Leave':>6} {'Time':>6} {'Score':>6}")
-    line_miles = 0
     for n, row in enumerate(rows):
         place = row.place
         straight = planRoute.haversine_miles(rows[n - 1].place, place) if n else 0
-        line_miles += straight
-        notes = []
-        if row.gas:
-            notes.append(f"+ {row.gas} gas stop{'s' if row.gas > 1 else ''} on the way")
-        window = windows.get(place['code'])
-        if row.missed:
-            notes.append(f"MISSED: closes {window[3]}")
-        elif row.wait:
-            notes.append(f"waits {row.wait * 60:.0f} min to open at {window[2]}")
-        elif window:
-            notes.append(f"open {window[2]}-{window[3]}")
-        notes += [f"completes {code} combo +{points}" for code, points in row.combos]
+        notes = row_notes(row, windows)
         print(f"{n:>3}  {place['code']:<24} {place['state']:<5} {place['points']:>6} {straight:>7.1f} "
               f"{row.leg_miles:>7.1f} {row.miles:>8.1f} {row.leg_hours * 60:>4.0f} m {row.arrive:>6.2f} "
               f"{row.leave:>6.2f} {time_of_day(row.arrive):>6} {row.score:>6}{'  ' + '; '.join(notes) if notes else ''}")
 
-    last = rows[-1]
-    miles, hours, points = last.miles, last.arrive, last.score
-    drive_hours = sum(h for _, h in legs)
     print()
-    print(f"Bonuses: {len(places) - 2}   Points: {points}   Road miles: {miles:.0f}   "
-          f"Gas stops: {gas_stops(miles, args.gas_miles)}   Hours: {hours:.2f} of {args.hours}")
-    missed = [row for row in rows if row.missed]
-    if missed:
-        lost = sum(row.place['points'] for row in missed)
-        print(f"MISSED HOURS: " + ", ".join(f"{row.place['code']} (arrive {time_of_day(row.arrive)}, "
-                                             f"closes {windows[row.place['code']][3]})" for row in missed)
-              + f"; {lost} points not counted")
-    if combos:
-        done = [combo for row in rows for combo in row.combos]
-        planned = {p['code'] for p in places}
-        # Combos the plan had every bonus of, lost to a missed bonus
-        lost = [code for code, _, members in combos
-                if planned.issuperset(members) and code not in {c for c, _ in done}]
-        print("Combos: " + (", ".join(f"{code} +{points}" for code, points in done) or "none")
-              + (f"; LOST to missed hours: {', '.join(lost)}" if lost else ''))
-    if hours <= args.hours:
-        print(f"FITS: back at Rally HQ with {(args.hours - hours) * 60:.0f} minutes to spare")
-    else:
-        late = [row.place['code'] for row in rows[1:-1] if row.leave > args.hours]
-        print(f"OVER by {(hours - args.hours) * 60:.0f} minutes. Stops you'd leave after time runs out: "
-              f"{', '.join(late) or 'none (only the drive back is late)'}")
-    if line_miles and drive_hours:
-        print(f"To plan closer to these roads: planRoute.py --road-factor {miles / line_miles:.2f} "
-              f"--speed {miles / drive_hours:.0f}")
+    for line in summary_lines(places, legs, rows, windows, combos, args.hours, args.gas_miles, time_of_day):
+        print(line)
+    points = rows[-1].score
     gpx = args.gpx or planRoute.stamped_gpx_name('route-google', points)
     write_gpx(rows, polylines, args.hours, source, gpx)
     print(f"\nGPX written to {gpx}")

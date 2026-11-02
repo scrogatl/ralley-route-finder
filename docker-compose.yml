@@ -2,11 +2,17 @@
 # automatically. Settings go in a .env file next to this one:
 #   APP_PASSWORD=the-site-password
 #   DOMAIN=routes.example.com   (or 203-0-113-5.sslip.io for server IP 203.0.113.5)
+# and, only on a private site, to check routes on real roads with Google
+# (every check is billed to the key's Google account):
+#   GOOGLE_CHECK=on
+#   GMAPS_API_KEY=your-google-maps-key
 services:
   app:
     build: .
     environment:
       APP_PASSWORD: ${APP_PASSWORD:?set APP_PASSWORD in .env}
+      GOOGLE_CHECK: ${GOOGLE_CHECK:-off}
+      GMAPS_API_KEY: ${GMAPS_API_KEY:-}
     volumes:
       - ./data:/data:ro
       - results:/results

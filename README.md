@@ -455,8 +455,9 @@ settings, then a page with the route table, a map of the stops and a GPX
 download. Every run is saved and listed on the home page to compare, and the
 same settings on the same data show the saved result straight away. Runs go
 one at a time, since each uses every CPU core; on a 4-core server one takes
-about a minute. It never calls Google, so it costs nothing beyond the server.
-The exact solver isn't included: it can run for hours.
+about a minute. Planning never calls Google, so it costs nothing beyond the
+server; checking a route with Google is an optional extra, off unless you
+turn it on (see below). The exact solver isn't included: it can run for hours.
 
 It reads the files from step 1, `bonus-lat-lon-points.csv` and
 `bonus-combos.csv`. The bonus data comes from the rally book, so keep the
@@ -513,6 +514,34 @@ any user name works, with the password from `.env`.
   Docker volume), and runs that were waiting start again.
 - **Change the password:** edit `.env`, then `docker compose up -d`.
 - **Logs:** `docker compose logs -f app`.
+- **Delete a run:** each scenario's ID is in the list's last column; its
+  files are `<id>.*`, so `docker compose exec app sh -c 'rm /results/<id>.*'`.
+
+### Checking routes with Google
+
+On a private site you can turn on a **Check with Google** button for
+finished routes. It does what `checkRoute.py` does: Google's road miles and
+driving times for each leg, when you'd reach each stop, bonuses missed for
+their hours, whether the day fits, and the `--road-factor` and `--speed`
+that match. The result is saved with the scenario, drawn on the map as
+Google's roads, and has its own GPX download. Leave the departure blank for
+one request without traffic; give a departure (Georgia time) for Google's
+traffic forecast, one request per leg. The same check again shows the saved
+result without asking Google.
+
+Every check is billed to your Google account, so **leave this off on a
+site the public can reach**. To turn it on, add to `.env` on the server, then
+`docker compose up -d`:
+
+```
+GOOGLE_CHECK=on
+GMAPS_API_KEY=your-google-maps-key
+```
+
+The app won't start with `GOOGLE_CHECK=on` and no key. Remove the two lines
+(or set `GOOGLE_CHECK=off`) and run `docker compose up -d` to turn it off
+again; checks already made stay visible. Departure times are Georgia time
+(`America/New_York`); set `RALLY_TZ` to change that.
 
 ### Trying it locally
 

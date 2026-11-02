@@ -106,6 +106,15 @@ table.route td:last-child { color: var(--muted); font-size: 13px; }
 .summary p { margin: 3px 0; }
 details { margin-top: 12px; }
 .rename { margin: 0 0 8px; }
+.google-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; margin-bottom: 8px; }
+.google-form .field { min-width: 220px; }
+input[type=datetime-local] {
+  font: inherit; padding: 6px 9px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--bg); color: var(--text);
+}
+button:disabled { opacity: .6; cursor: progress; }
+details.check { border-top: 1px solid var(--line); padding-top: 10px; }
+details.check > summary { font-size: 14px; color: var(--text); }
 .rename form { display: flex; gap: 8px; margin-top: 8px; max-width: 420px; }
 .rename button { padding: 6px 14px; }
 summary { cursor: pointer; color: var(--muted); font-size: 13px; }

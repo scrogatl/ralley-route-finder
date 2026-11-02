@@ -68,7 +68,8 @@
 <section class="card">
   <div id="map"></div>
   <p class="note">Numbered dots are the route's stops, in order; small grey dots are the bonuses it skips.
-    Lines are straight, as the planner sees them, not roads.</p>
+    Blue lines are straight, as the planner sees them{% if run.checks %}; the orange line is Google's roads
+    ({{ run.checks[0].source }}){% else %}, not roads{% endif %}.</p>
 </section>
 
 <section class="card">
@@ -105,6 +106,62 @@
   </details>
 </section>
 
+{% if google_enabled or run.checks %}
+<section class="card" id="google">
+  <h2>Real roads, from Google</h2>
+  {% if google_enabled %}
+    {% if google_error %}<p class="error">{{ google_error }}</p>{% endif %}
+    <form method="post" action="{{ url_for('start_google_check', run_id=run.id) }}" class="google-form"
+          onsubmit="const b = this.querySelector('button'); b.disabled = true; b.textContent = 'Asking Google…';">
+      <label class="field">
+        <span>Departure <small>optional, Georgia time</small></span>
+        <input type="datetime-local" name="depart" value="{{ google_form.get('depart', '') }}">
+      </label>
+      <button type="submit">Check with Google</button>
+    </form>
+    <p class="note">Leave the departure blank for road miles and times without traffic, in one request. With a
+      departure, Google forecasts traffic leg by leg ({{ run.legs | length - 1 }} requests, billed at a higher
+      rate) and bonus hours count from that time. A check that's been done before shows the saved result.</p>
+  {% endif %}
+  {% for check in run.checks %}
+    <details class="check" id="google-{{ check.id }}" {% if loop.first %}open{% endif %}>
+      <summary><strong>{{ '{:,}'.format(check.points) }} points</strong>, {{ check.miles }} road miles,
+        {{ check.hours }} of {{ run.settings.hours }} hours, {{ 'fits' if check.fits else 'OVER TIME' }}
+        <span class="muted">· {{ check.source }} · checked {{ check.created[5:16].replace('T', ' ') }} UTC</span></summary>
+      <div class="table-wrap">
+        <table class="route sortable">
+          <thead>
+            <tr><th class="num">#</th><th>Bonus</th><th class="num">Points</th><th class="num">Line mi</th>
+              <th class="num">Road mi</th><th class="num">Total mi</th><th class="num">Drive min</th>
+              <th class="num">Arrive</th><th class="num">Score</th><th>Notes</th></tr>
+          </thead>
+          <tbody>
+            {% for row in check.rows %}
+              <tr>
+                <td class="num">{{ loop.index0 }}</td>
+                <td><strong>{{ row.code }}</strong> <span class="muted">{{ row.state }}</span></td>
+                <td class="num">{{ row.points }}</td>
+                <td class="num">{{ row.line_miles }}</td>
+                <td class="num">{{ row.road_miles }}</td>
+                <td class="num">{{ row.miles }}</td>
+                <td class="num">{{ row.drive }}</td>
+                <td class="num" data-sort="{{ row.leave }}">{{ row.arrive }}</td>
+                <td class="num">{{ '{:,}'.format(row.score) }}</td>
+                <td>{{ row.notes | join('; ') }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="summary">
+        {% for line in check.summary %}<p>{{ line }}</p>{% endfor %}
+      </div>
+      <p class="actions"><a class="button secondary" href="{{ url_for('google_gpx', run_id=run.id, check_id=check.id) }}">Download Google GPX</a></p>
+    </details>
+  {% endfor %}
+</section>
+{% endif %}
+
 <script>
   const legs = {{ run.legs | tojson }};
   const bonuses = {{ bonuses | tojson }};
@@ -119,6 +176,9 @@
       .bindTooltip(`${b.code} · ${b.points}`).addTo(map);
   }
   const line = L.polyline(legs.map(l => [l.lat, l.lon]), {color: '#1f5fbf', weight: 3, opacity: 0.8}).addTo(map);
+  {% if run.checks %}
+    L.polyline({{ run.checks[0].track | tojson }}, {color: '#e07b00', weight: 3, opacity: 0.85}).addTo(map);
+  {% endif %}
   legs.slice(0, -1).forEach((l, n) => {
     const label = n === 0 ? 'HQ' : String(n);
     const icon = L.divIcon({className: n === 0 ? 'stop hq' : 'stop', html: label, iconSize: n === 0 ? [30, 22] : [22, 22]});
