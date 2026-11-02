@@ -42,7 +42,7 @@ runs planRoute.py's drop-and-reinsert search on the result.
     python planRouteSearch.py --widen --time-limit 120
     python planRouteSearch.py --method dfs --branch 0 --hours 6
 """
-import argparse, collections, multiprocessing, os, sys, time
+import argparse, collections, multiprocessing, os, signal, sys, time
 import planRoute
 from planRoute import Planner, load_bonuses, clock
 
@@ -350,6 +350,10 @@ def quick_route(planner, workers):
     polished with planRoute.py's drop-and-reinsert search and ordered to bank
     points early: about 4x faster than Planner.solve, and as good on the 2026
     bonuses, but it may miss a better route on other data."""
+    if planner.only:
+        return planner.only_route()
+    # Stops with planRoute.py's explanation if the --must stops can't fit
+    planner.must_route()
     search = TreeSearch(planner, QUICK_BRANCH, BEAM_H_WEIGHT, QUICK_WIDTH // 10)
     if workers > 1:
         search.pool = multiprocessing.Pool(workers, initializer=_init_worker, initargs=(search,))
@@ -357,8 +361,9 @@ def quick_route(planner, workers):
     try:
         best = search.beam(QUICK_WIDTH)
     finally:
+        # Its work is done, or it's being stopped: either way end the workers now
         if search.pool:
-            search.pool.close()
+            search.pool.terminate()
     if best is None:
         sys.exit("ERROR: found no route with every --must stop")
     planRoute.progress(f"Polishing the beam search's {best.points}-point route")
@@ -375,6 +380,8 @@ def quick_route(planner, workers):
 def _init_worker(search):
     global _worker_search
     _worker_search = search
+    # As planRoute.py's workers: exit when the pool is shut down early
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
 
 
 def _expand(task):

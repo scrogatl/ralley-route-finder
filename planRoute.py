@@ -26,7 +26,7 @@ thorough rather than fast: expect several minutes.
 
     python planRoute.py bonus-lat-lon-points.csv --hours 10 --speed 45
 """
-import argparse, collections, csv, itertools, math, multiprocessing, os, sys, time
+import argparse, collections, csv, itertools, math, multiprocessing, os, signal, sys, time
 import xml.etree.ElementTree as ET
 from datetime import datetime
 
@@ -119,6 +119,8 @@ def add_first_args(parser):
                              'the search plans the rest of the day after them')
     parser.add_argument('--must', metavar='CODES',
                         help='visit these bonuses, in whatever order fits best, e.g. CGSH,SMCH')
+    parser.add_argument('--only', action='store_true',
+                        help='route only the --first and --must bonuses, in the quickest order, adding nothing else')
 
 
 def bonus_indexes(planner, option, text):
@@ -138,10 +140,15 @@ def apply_first(planner, args):
     the --must bonuses anywhere in it."""
     if getattr(args, 'must', None):
         planner.required = frozenset(bonus_indexes(planner, '--must', args.must))
+    if getattr(args, 'only', False):
+        if not (args.first or getattr(args, 'must', None)):
+            sys.exit("ERROR: --only needs bonuses to route, from --must or --first")
+        planner.only = True
     if not args.first:
         return
     planner.lead = bonus_indexes(planner, '--first', args.first)
     if planner.route_hours(planner.lead) > planner.max_hours:
+        codes = [planner.places[b]['code'] for b in planner.lead]
         sys.exit(f"ERROR: --first {', '.join(codes)} takes {planner.route_hours(planner.lead):.2f} hours "
                  f"with the drive back, more than the {planner.max_hours} hour budget")
 
@@ -281,6 +288,8 @@ class Planner:
         self.lead = []
         # Stops every route must have, in any order (--must)
         self.required = frozenset()
+        # Route only the --first and --must stops, adding nothing (--only)
+        self.only = False
         # Combo bonuses, (code, points, frozenset of stops): the points count
         # only if the route has every one of those stops (--combos)
         self.combos = []
@@ -404,6 +413,42 @@ class Planner:
         hours, k = min((self.route_hours(route[:k] + [b] + route[k:]), k)
                        for k in range(len(self.lead), len(route) + 1))
         return route[:k] + [b] + route[k:] if hours <= self.max_hours else None
+
+    def only_route(self):
+        """For --only: the --first stops, then the --must stops in the
+        quickest order (trying every order of up to 8), ordered to bank points
+        early where that still fits. Stops with an error if they don't fit."""
+        rest = sorted(self.required - set(self.lead))
+        if len(rest) <= 8:
+            route = min((self.lead + list(order) for order in itertools.permutations(rest)), key=self.route_hours)
+        else:
+            route = self.combo_seed(())
+        if route is None or self.route_hours(route) > self.max_hours:
+            # Explains why, and how long they take
+            self.must_route()
+        return self.front_load_order(route)
+
+    def must_route(self):
+        """The quickest route through just the --first and --must stops: by
+        inserting each where it adds the least time, or if that doesn't fit,
+        by trying every order of up to 8 --must stops. Stops with an error
+        saying how long they take if no order fits."""
+        route = self.combo_seed(())
+        if route is not None:
+            return route
+        rest = sorted(self.required - set(self.lead))
+        with_first = " with the --first stops" if self.lead else ""
+        if len(rest) > 8:
+            sys.exit(f"ERROR: --must: those bonuses don't all fit in the time budget{with_first}")
+        route = min((self.lead + list(order) for order in itertools.permutations(rest)), key=self.route_hours)
+        hours = self.route_hours(route)
+        if hours <= self.max_hours:
+            return route
+        if hours == math.inf:
+            sys.exit(f"ERROR: --must: no order of those bonuses{with_first} makes all of their hours")
+        sys.exit(f"ERROR: --must: those bonuses{with_first} take {hours:.2f} hours on their own, "
+                 f"more than the {self.max_hours:g} hour budget (quickest order: "
+                 f"{', '.join(self.places[b]['code'] for b in route)})")
 
     def combo_seed(self, combos):
         """A route through the --first stops, the --must stops and every stop
@@ -705,18 +750,15 @@ class Planner:
         return self.local_search(self.improve(self.insert_greedily(start, weight), weight), weight, max_drop)
 
     def solve(self, weights, max_drop, workers):
+        if self.only:
+            return self.only_route()
         # Start once from an empty route, then once from each bonus on its own,
         # so every bonus gets a chance to anchor the route. Skip bonuses too far
         # for a round trip, since nothing later would drop them from the route.
         # Any --first stops come before all of that, and every start already
         # has the --must stops, put where they add the least time.
         lead = self.lead
-        base = self.combo_seed(())
-        if base is None:
-            sys.exit("ERROR: --must: those bonuses don't all fit in the time budget"
-                     + (" with the --first stops" if lead else "")
-                     + (" and their hours" if self.windows and any(self.windows[b] for b in self.required)
-                        else ""))
+        base = self.must_route()
         starts = [base] + [route for route in (self.insert_cheapest(base, b) for b in range(1, len(self.places))
                                                if b not in base) if route is not None]
         # Inserting one bonus at a time rarely builds a whole combo, so also
@@ -769,6 +811,9 @@ _worker_planner = None
 def _init_worker(planner):
     global _worker_planner
     _worker_planner = planner
+    # Exit when the pool is shut down early, even if the parent (such as the
+    # web app's server) handles SIGTERM in a way that doesn't exit
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
 
 
 def _search_task(task):

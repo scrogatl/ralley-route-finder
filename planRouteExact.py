@@ -175,6 +175,11 @@ def solve_exact(planner, time_limit, workers, hint):
         if b not in visit:
             sys.exit(f"ERROR: --must: {places[b]['code']} can't be reached and back within the time budget")
         model.Add(visit[b] == 1)
+    # --only: nothing but the --first and --must stops
+    if planner.only:
+        for b in candidates:
+            if b not in planner.required and b not in planner.lead:
+                model.Add(visit[b] == 0)
     # Gas stops: at least one for each full gas_miles driven
     # (gas * interval > miles - interval, i.e. gas >= floor(miles / interval))
     gas = model.NewIntVar(0, 1000, 'gas_stops')

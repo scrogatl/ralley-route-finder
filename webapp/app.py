@@ -23,7 +23,7 @@ Environment:
 
     APP_PASSWORD=secret flask --app webapp/app.py run    # to try it locally
 """
-import argparse, hashlib, hmac, json, math, os, queue, sys, threading, time
+import argparse, glob, hashlib, hmac, json, math, os, queue, sys, threading, time
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from flask import Flask, Response, abort, redirect, render_template, request, send_file, url_for
@@ -63,11 +63,12 @@ SWITCHES = [
     ('slow_zone', 'Atlanta slow zone', True, 'inside I-285 plus about 5 miles at 25 MPH'),
     ('use_hours', 'Bonus hours', True, "only count bonuses reached while they're open"),
     ('use_combos', 'Combo bonuses', True, 'add combo points for getting every bonus in one'),
+    ('only', 'Only the must-visit bonuses', False, 'route just those, in the quickest order, adding nothing else'),
     ('quick', 'Quick mode', False, 'beam search: about 4x faster and as good on the 2026 bonuses, but it may '
                                    'miss a better route; no front-load'),
 ]
-# How the list of runs describes a switch that's off (quick mode, off by
-# default, is described when it's on)
+# How the list of runs describes a switch that's off (only and quick, off by
+# default, are described when on)
 SWITCHED_OFF = {'slow_zone': 'no Atlanta slow zone', 'use_hours': 'bonus hours ignored', 'use_combos': 'no combos'}
 DEFAULTS = {name: default for name, _, default, *_ in NUMBERS} | {name: on for name, _, on, _ in SWITCHES} | {
     'must': '', 'start': planRoute.RALLY_START}
@@ -83,6 +84,12 @@ os.makedirs(RESULTS_DIR, exist_ok=True)
 jobs = queue.Queue()
 # What the run in progress is doing, from the planner's progress lines
 progress = {}
+# Runs asked to stop; the planner notices at its next progress line
+stopping = set()
+
+
+class Stopped(Exception):
+    """Raised in the planner, through its progress lines, to stop a run."""
 
 
 @app.before_request
@@ -167,6 +174,8 @@ def read_form(form):
     except argparse.ArgumentTypeError as error:
         raise ValueError(f"Rally start: {error}")
     settings['must'] = ','.join(code.strip().upper() for code in form.get('must', '').split(',') if code.strip())
+    if settings['only'] and not settings['must']:
+        raise ValueError("Only the must-visit bonuses: list the bonuses in Must visit")
     if settings['quick'] and settings['front_load']:
         raise ValueError("Quick mode: set Front-load to 0, since quick mode doesn't support it")
     return settings
@@ -189,6 +198,8 @@ def describe(settings):
     if settings.get('must'):
         parts.append(f"must visit {settings['must']}")
     parts += [text for name, text in SWITCHED_OFF.items() if not settings[name]]
+    if settings.get('only'):
+        parts.append('only those')
     if settings.get('quick'):
         parts.append('quick mode')
     return ', '.join(parts)
@@ -197,7 +208,7 @@ def describe(settings):
 def plan(run):
     """Run the planner for one saved run, and save the result or the error."""
     settings = run['settings']
-    args = argparse.Namespace(first=settings.get('first'), must=settings.get('must'), gas_miles=settings['gas_miles'],
+    args = argparse.Namespace(first=settings.get('first'), must=settings.get('must'), only=settings.get('only'), gas_miles=settings['gas_miles'],
                               gas_minutes=settings['gas_minutes'], combos=COMBOS_CSV,
                               ignore_combos=not settings['use_combos'])
     started = time.monotonic()
@@ -215,8 +226,13 @@ def plan(run):
             route = planRouteSearch.quick_route(planner, WORKERS)
         else:
             route = planner.solve(planRoute.START_WEIGHTS, 6, WORKERS)
+    except Stopped:
+        run.update(status='stopped', error="Stopped before it finished")
+        save_worker_copy(run)
+        return
     except SystemExit as stop:
         run.update(status='error', error=str(stop.code).removeprefix('ERROR: ').replace('--must', 'Must visit')
+                   .replace('--only', 'Only the must-visit bonuses')
                    .replace('--first', 'First stops'))
         save_worker_copy(run)
         return
@@ -251,16 +267,30 @@ def worker():
     # run's page instead of a terminal
     while True:
         run_id = jobs.get()
-        planRoute.progress = lambda text, run_id=run_id: progress.__setitem__(run_id, text.strip())
-        run = load_run(run_id)
-        run['status'] = 'running'
-        save_worker_copy(run)
+
+        def report(text, run_id=run_id):
+            # Raising here unwinds the planner, which shuts down its worker processes
+            if run_id in stopping:
+                raise Stopped
+            progress[run_id] = text.strip()
+
+        planRoute.progress = report
+        with save_lock:
+            path = result_path(run_id)
+            # Skip a run stopped or deleted while it waited ('running' is one
+            # the server was in the middle of when it last stopped)
+            if not os.path.exists(path) or load_run(run_id)['status'] not in ('queued', 'running'):
+                continue
+            run = load_run(run_id)
+            run['status'] = 'running'
+            save_run(run)
         try:
             plan(run)
         except Exception:
             app.logger.exception(f"run {run_id} failed")
         finally:
             progress.pop(run_id, None)
+            stopping.discard(run_id)
 
 
 # Runs waiting when the server last stopped go back in the queue
@@ -297,7 +327,7 @@ def start_run():
     path = result_path(run_id)
     if os.path.exists(path):
         run = load_run(run_id)
-        if run['status'] != 'error':
+        if run['status'] not in ('error', 'stopped'):
             # Same settings and data as an earlier run: show that one
             return redirect(url_for('show_run', run_id=run_id))
     if jobs.qsize() >= MAX_QUEUED:
@@ -315,7 +345,7 @@ def run_state(run):
                     and other['created'] < run['created'])
         return f"Waiting: {ahead} run{'s' if ahead != 1 else ''} ahead of this one"
     if run['status'] == 'running':
-        return progress.get(run['id'], 'Starting')
+        return 'Stopping…' if run['id'] in stopping else progress.get(run['id'], 'Starting')
     return ''
 
 
@@ -434,6 +464,30 @@ def google_gpx(run_id, check_id):
         abort(404)
     return send_file(path, as_attachment=True,
                      download_name=f"route-google-{run_id}-{check['points']}pts.gpx")
+
+
+@app.post('/run/<run_id>/stop')
+def stop_run(run_id):
+    with save_lock:
+        run = load_run(run_id)
+        if run['status'] == 'queued':
+            run.update(status='stopped', error="Stopped before it started")
+            save_run(run)
+        elif run['status'] == 'running':
+            stopping.add(run_id)
+    return redirect(url_for('show_run', run_id=run_id))
+
+
+@app.post('/run/<run_id>/delete')
+def delete_run(run_id):
+    with save_lock:
+        run = load_run(run_id)
+        if run['status'] in ('queued', 'running'):
+            abort(409, "Stop the run before deleting it")
+        # The run, its GPX and any Google checks' GPX files
+        for path in glob.glob(glob.escape(result_path(run_id, '')) + '*'):
+            os.remove(path)
+    return redirect(url_for('index'))
 
 
 @app.post('/run/<run_id>/name')

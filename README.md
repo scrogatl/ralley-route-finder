@@ -194,6 +194,7 @@ PyPy.
 | `--front-load` | 0 | Favor collecting points early, in case the day is cut short (see below) |
 | `--first` | none | Start with these bonuses, in this order, e.g. `CGSH,SMCH` (see below) |
 | `--must` | none | Visit these bonuses, in whatever order fits best (see below) |
+| `--only` | off | Route only the `--must` and `--first` bonuses, adding nothing else |
 | `--quick` | off | Plan with the beam search instead: about 4x faster, as good on the 2026 bonuses (see [Tree search](#tree-search-beam-and-depth-first)) |
 | `--start` | 07:00 | Rally start time, for the hours bonuses are open |
 | `--ignore-hours` | | Plan as if every bonus is open all day |
@@ -246,8 +247,23 @@ The web app's "Must visit" box does this.
 python planRoute.py --must MTNH,ENOR,UGCB
 ```
 
-It stops with an error if those bonuses can't all fit in one day together.
-The two can be combined, and `planRouteExact.py` takes both.
+It stops with an error if those bonuses can't all fit in one day together,
+saying how long the quickest route through just them takes. For example, the
+five EAGLE combo bonuses take 10.8 hours on their own at the default
+settings, so `--hours 10` can't fit them. `--first` and `--must` can be
+combined, and `planRouteExact.py` takes both.
+
+`--only` routes just those bonuses, in the quickest order (every order is
+tried for up to 8), and adds nothing else: the web app's "Only the
+must-visit bonuses" switch. It shows what a set of bonuses costs on its own:
+
+```bash
+python planRoute.py --hours 11 --must BISH,GSUE,STRU,WJMS,WWRD --only
+```
+
+That's EAGLE alone: 6,090 points in 10.84 hours. Without `--only`, the same
+11 hours adds LBTY and FABF beside them for 7,350; with no `--must` at all it
+scores about 12,400, so EAGLE isn't worth it.
 
 ### Finding clusters of bonuses
 
@@ -627,8 +643,11 @@ any user name works, with the password from `.env`.
   Docker volume), and runs that were waiting start again.
 - **Change the password:** edit `.env`, then `docker compose up -d`.
 - **Logs:** `docker compose logs -f app`.
-- **Delete a run:** each scenario's ID is in the list's last column; its
-  files are `<id>.*`, so `docker compose exec app sh -c 'rm /results/<id>.*'`.
+- **Stop or delete a run:** a waiting or running scenario's page has a
+  **Stop this run** button; a running one stops within a second or so. Any
+  other scenario's page has a **Delete this scenario** link, which removes it
+  and its files (its GPX and any Google checks). A stopped scenario can be
+  run again by submitting the same settings.
 
 ### Checking routes with Google
 

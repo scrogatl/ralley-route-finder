@@ -60,7 +60,7 @@
               <tr>
                 <td class="num" data-sort="{{ run.points if run.status == 'done' else '' }}">
                   {% if run.status == 'done' %}<a href="{{ url_for('show_run', run_id=run.id) }}"><strong>{{ '{:,}'.format(run.points) }}</strong></a>
-                  {% elif run.status == 'error' %}<a href="{{ url_for('show_run', run_id=run.id) }}">error</a>
+                  {% elif run.status in ('error', 'stopped') %}<a href="{{ url_for('show_run', run_id=run.id) }}">{{ run.status }}</a>
                   {% else %}<a href="{{ url_for('show_run', run_id=run.id) }}">{{ run.status }}…</a>{% endif %}
                   {% if run.checks %}<br><small class="muted" title="{{ run.checks[0].source }}">Google {{ '{:,}'.format(run.checks[0].points) }}</small>{% endif %}
                 </td>

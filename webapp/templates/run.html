@@ -38,18 +38,21 @@
   {% if run.status in ('queued', 'running') %}
     <p class="status" id="state">{{ state }}</p>
     <p class="note">This page updates by itself when the route is ready.</p>
+    <form method="post" action="{{ url_for('stop_run', run_id=run.id) }}" class="actions">
+      <button type="submit" class="secondary">Stop this run</button>
+    </form>
     <script>
       (function poll() {
         fetch("{{ url_for('run_status', run_id=run.id) }}").then(r => r.json()).then(s => {
-          if (s.status === 'done' || s.status === 'error') { location.reload(); return; }
+          if (s.status !== 'queued' && s.status !== 'running') { location.reload(); return; }
           document.getElementById('state').textContent = s.state;
           setTimeout(poll, 2000);
         }).catch(() => setTimeout(poll, 5000));
       })();
     </script>
-  {% elif run.status == 'error' %}
+  {% elif run.status in ('error', 'stopped') %}
     <p class="error">{{ run.error }}</p>
-    <p><a class="button" href="{{ url_for('index', **{'from': run.id}) }}">Change the settings</a></p>
+    <p class="actions"><a class="button" href="{{ url_for('index', **{'from': run.id}) }}">Change the settings</a></p>
   {% else %}
     <div class="headline">
       <div><span>{{ run.stops }}</span>bonuses</div>
@@ -61,6 +64,12 @@
       <a class="button" href="{{ url_for('run_gpx', run_id=run.id) }}">Download GPX</a>
       <a class="button secondary" href="{{ url_for('index', **{'from': run.id}) }}">Try changes to this scenario</a>
     </p>
+  {% endif %}
+  {% if run.status not in ('queued', 'running') %}
+    <form method="post" action="{{ url_for('delete_run', run_id=run.id) }}" class="delete"
+          onsubmit="return confirm('Delete this scenario and its files? This can\'t be undone.');">
+      <button type="submit" class="link">Delete this scenario</button>
+    </form>
   {% endif %}
 </section>
 

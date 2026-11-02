@@ -69,7 +69,12 @@ button, .button {
   padding: 9px 16px; border-radius: 6px; border: 1px solid var(--accent);
   background: var(--accent); color: var(--accent-text); text-decoration: none;
 }
-.button.secondary { background: transparent; color: var(--accent); }
+.button.secondary, button.secondary { background: transparent; color: var(--accent); }
+button.link {
+  background: none; border: none; padding: 0; font-weight: 400; font-size: 13px;
+  color: var(--warn); text-decoration: underline; cursor: pointer;
+}
+.delete { margin: 14px 0 0; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0; }
 
 .note, .muted { color: var(--muted); font-size: 13px; }
