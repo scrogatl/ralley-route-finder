@@ -6,6 +6,9 @@
 # (every check is billed to the key's Google account):
 #   GOOGLE_CHECK=on
 #   GMAPS_API_KEY=your-google-maps-key
+# and, to monitor it with New Relic APM and Browser:
+#   NEW_RELIC_LICENSE_KEY=your-ingest-license-key
+#   NEW_RELIC_APP_NAME=Rally Route Finder
 services:
   app:
     build: .
@@ -13,6 +16,8 @@ services:
       APP_PASSWORD: ${APP_PASSWORD:?set APP_PASSWORD in .env}
       GOOGLE_CHECK: ${GOOGLE_CHECK:-off}
       GMAPS_API_KEY: ${GMAPS_API_KEY:-}
+      NEW_RELIC_LICENSE_KEY: ${NEW_RELIC_LICENSE_KEY:-}
+      NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME:-Rally Route Finder}
     volumes:
       - ./data:/data:ro
       - results:/results

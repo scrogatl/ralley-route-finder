@@ -730,6 +730,27 @@ The app won't start with `GOOGLE_CHECK=on` and no key. Remove the two lines
 again; checks already made stay visible. Departure times are Georgia time
 (`America/New_York`); set `RALLY_TZ` to change that.
 
+### Monitoring with New Relic
+
+The app can report to [New Relic](https://newrelic.com): **APM** for the
+web requests, each planner run (a background task named `plan`, with the
+run's ID, hours, quick mode and must-visit bonuses as attributes) and the
+calls to Google, and **Browser** for page loads in visitors' browsers. It's
+off unless a license key is set. Add to `.env` on the server, then
+`docker compose up -d`:
+
+```
+NEW_RELIC_LICENSE_KEY=your-ingest-license-key
+NEW_RELIC_APP_NAME=Rally Route Finder
+```
+
+The name is optional (that's the default). For Browser, also turn on
+browser monitoring for this APM app in New Relic (add a Browser app that
+uses the APM agent, and pick this app). New Relic then hands the agent its
+browser script, and every page includes it. Any other
+setting can be given as a `NEW_RELIC_*` environment variable in
+`docker-compose.yml`. Remove the key to turn it off.
+
 ### Trying it locally
 
 ```bash

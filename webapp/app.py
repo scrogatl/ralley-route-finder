@@ -20,12 +20,27 @@ Environment:
                      to your Google account (default: off)
     GMAPS_API_KEY    the Google Maps API key, needed when GOOGLE_CHECK is on
     RALLY_TZ         time zone for Google departure times (default America/New_York)
+    NEW_RELIC_LICENSE_KEY  turns on New Relic APM (requests, planner runs as
+                     background tasks, Google calls) and Browser monitoring
+                     on every page (default: off)
+    NEW_RELIC_APP_NAME     the app's name in New Relic (default Rally Route Finder)
 
     APP_PASSWORD=secret flask --app webapp/app.py run    # to try it locally
 """
 import argparse, glob, hashlib, hmac, json, math, os, queue, sys, threading, time
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
+
+# New Relic, only with a license key. It starts before Flask is imported, so
+# it can instrument it; the rest of its settings can come from NEW_RELIC_*
+# environment variables
+NEW_RELIC = bool(os.environ.get('NEW_RELIC_LICENSE_KEY'))
+if NEW_RELIC:
+    # Before the import, which is when the agent reads its settings
+    os.environ.setdefault('NEW_RELIC_APP_NAME', 'Rally Route Finder')
+    import newrelic.agent
+    newrelic.agent.initialize()
+
 from flask import Flask, Response, abort, redirect, render_template, request, send_file, url_for
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
@@ -79,6 +94,18 @@ app = Flask(__name__)
 @app.context_processor
 def google_setting():
     return {'google_enabled': GOOGLE_CHECK}
+
+
+@app.context_processor
+def browser_monitoring():
+    # New Relic Browser's script for this page, or nothing; the agent then
+    # knows not to add it again itself
+    return {'browser_timing': newrelic.agent.get_browser_timing_header() if NEW_RELIC else ''}
+
+
+def background_task(function):
+    """Record each call as a New Relic background task, when it's on."""
+    return newrelic.agent.background_task(name=function.__name__)(function) if NEW_RELIC else function
 
 os.makedirs(RESULTS_DIR, exist_ok=True)
 jobs = queue.Queue()
@@ -205,9 +232,14 @@ def describe(settings):
     return ', '.join(parts)
 
 
+@background_task
 def plan(run):
     """Run the planner for one saved run, and save the result or the error."""
     settings = run['settings']
+    if NEW_RELIC:
+        newrelic.agent.add_custom_attributes([('run_id', run['id']), ('hours', settings['hours']),
+                                              ('quick', bool(settings.get('quick'))),
+                                              ('must', settings.get('must') or '')])
     args = argparse.Namespace(first=settings.get('first'), must=settings.get('must'), only=settings.get('only'), gas_miles=settings['gas_miles'],
                               gas_minutes=settings['gas_minutes'], combos=COMBOS_CSV,
                               ignore_combos=not settings['use_combos'])

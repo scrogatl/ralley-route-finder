@@ -2,3 +2,5 @@ flask==3.1.0
 gunicorn==23.0.0
 # For the optional Google checks (GOOGLE_CHECK=on)
 requests==2.32.3
+# For the optional New Relic monitoring (NEW_RELIC_LICENSE_KEY)
+newrelic==14.0.0
