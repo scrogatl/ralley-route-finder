@@ -38,7 +38,7 @@ header {
 }
 .brand { font-weight: 700; font-size: 18px; text-decoration: none; color: var(--text); }
 .tagline { color: var(--muted); font-size: 13px; }
-main { max-width: 1280px; margin: 0 auto; padding: 16px; }
+main { max-width: 1600px; margin: 0 auto; padding: 16px; }
 h1 { font-size: 22px; margin: 0 0 8px; }
 h2 { font-size: 17px; margin: 0 0 12px; }
 
@@ -46,12 +46,15 @@ h2 { font-size: 17px; margin: 0 0 12px; }
   background: var(--card); border: 1px solid var(--line); border-radius: 10px;
   padding: 18px; margin-bottom: 16px;
 }
-.layout { display: grid; grid-template-columns: minmax(300px, 420px) 1fr; gap: 16px; align-items: start; }
+/* minmax(0, 1fr) lets the runs column shrink below its table's width, so a
+   wide table scrolls inside its card instead of pushing off the screen */
+.layout { display: grid; grid-template-columns: minmax(280px, 360px) minmax(0, 1fr); gap: 16px; align-items: start; }
 .layout .card { margin-bottom: 0; }
-@media (max-width: 860px) { .layout { grid-template-columns: 1fr; } }
+@media (max-width: 1100px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 600px) { main { padding: 10px; } .card { padding: 14px; } }
 
-.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 12px 0; }
-@media (max-width: 420px) { .grid { grid-template-columns: 1fr; } }
+/* Two fields a row in the side column; more when the form has the page's full width */
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; margin: 12px 0; }
 .field { display: flex; flex-direction: column; gap: 3px; }
 .field span { font-weight: 600; font-size: 13px; }
 .field small, .switch small { color: var(--muted); font-size: 12px; font-weight: 400; }
@@ -105,7 +108,10 @@ table.sortable th::after { content: " ↕"; opacity: .35; }
 table.sortable th[aria-sort=ascending]::after { content: " ▲"; opacity: 1; }
 table.sortable th[aria-sort=descending]::after { content: " ▼"; opacity: 1; }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-td.id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; white-space: nowrap; }
+.id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; white-space: nowrap; }
+td.when { white-space: nowrap; }
+/* Long lists of bonus codes break between codes rather than widening the table */
+td.settings { min-width: 16em; overflow-wrap: anywhere; }
 table.route td:last-child { color: var(--muted); font-size: 13px; }
 .summary { margin-top: 12px; font-variant-numeric: tabular-nums; }
 .summary p { margin: 3px 0; }
@@ -127,7 +133,8 @@ details.check > summary { font-size: 14px; color: var(--text); }
 .rename button { padding: 6px 14px; }
 summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 
-#map { height: 480px; border-radius: 8px; }
+/* Shorter on a short laptop screen, so the table below still shows */
+#map { height: min(480px, 60vh); min-height: 300px; border-radius: 8px; }
 @media (max-width: 600px) { #map { height: 340px; } }
 .stop {
   background: var(--accent); color: var(--accent-text); border: 2px solid #fff; border-radius: 50%;

@@ -237,7 +237,7 @@ def describe(settings):
         # Runs from before the form asked for must-visit bonuses instead
         parts.append(f"first {settings['first']}")
     if settings.get('must'):
-        parts.append(f"must visit {settings['must']}")
+        parts.append(f"must visit {settings['must'].replace(',', ', ')}")
     parts += [text for name, text in SWITCHED_OFF.items() if not settings[name]]
     if settings.get('athens_zone'):
         parts.append('Athens slow zone')

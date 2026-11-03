@@ -149,7 +149,7 @@
     <details class="check" id="google-{{ check.id }}" {% if loop.first %}open{% endif %}>
       <summary><strong>{{ '{:,}'.format(check.points) }} points</strong>, {{ check.miles }} road miles,
         {{ check.hours }} of {{ run.settings.hours }} hours, {{ 'fits' if check.fits else 'OVER TIME' }}
-        <span class="muted">· {{ check.source }} · checked {{ check.created[5:16].replace('T', ' ') }} UTC</span></summary>
+        <span class="muted">· {{ check.source }} · checked <time datetime="{{ check.created }}">{{ check.created[5:16].replace('T', ' ') }} UTC</time></span></summary>
       <div class="table-wrap">
         <table class="route sortable">
           <thead>
