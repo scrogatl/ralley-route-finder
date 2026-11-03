@@ -422,6 +422,7 @@ def main():
     parser.add_argument('--gpx',
                         help='also write the route as GPX for Garmin BaseCamp and GPS units '
                              '(default route-search-DATE-TIME-POINTSpts.gpx)')
+    planRoute.add_leg_args(parser)
     planRoute.add_slow_zone_args(parser)
     planRoute.add_gas_args(parser)
     planRoute.add_first_args(parser)
@@ -432,7 +433,8 @@ def main():
     hq, bonuses = load_bonuses(args.csv_file)
     slow_zones = planRoute.slow_zones_from_args(args)
     planner = Planner(hq, bonuses, args.hours, args.speed, args.stop_minutes, args.road_factor, 0,
-                      slow_zones, args.gas_miles, args.gas_minutes, args.start, not args.ignore_hours)
+                      slow_zones, args.gas_miles, args.gas_minutes, args.start, not args.ignore_hours,
+                      **planRoute.timing_options(args))
     planRoute.apply_first(planner, args)
     planRoute.apply_combos(planner, args)
     if args.h_weight is None:
@@ -479,7 +481,7 @@ def main():
         sys.exit("ERROR: search produced an invalid route; this is a bug")
 
     print(f"{len(bonuses)} bonuses, {args.hours} hours at {args.speed} MPH, "
-          f"{args.stop_minutes:g} min per stop, road factor {args.road_factor:g}")
+          f"{args.stop_minutes:g} min per stop, {args.leg_minutes:g} per leg, road factor {args.road_factor:g}")
     print(f"{planRoute.describe_gas(args)}, {planRoute.describe_slow_zones(slow_zones)}, "
           f"{planRoute.describe_first(planner)}")
     print(f"{planRoute.describe_hours(planner)}")

@@ -116,16 +116,19 @@ it can take a few minutes; it uses all CPU cores and shows its progress
 while it runs.
 
 It estimates distances as straight-line miles between bonuses, and time as
-distance ÷ average speed, plus a stop at each bonus to take its picture and a
-gas stop every 175 miles. Driving through Atlanta (inside I-285 plus about 5
-miles) is slowed to 25 MPH. The
+distance ÷ average speed, plus 3 minutes a leg for leaving the main road and
+parking, a stop at each bonus to take its picture and a gas stop every 175
+miles. Driving through Atlanta (inside I-285 plus about 5 miles) is slowed
+to 25 MPH. The
 route starts and ends at Rally HQ and fits in the time budget. It prints each
 stop in order with leg miles, running hours, arrival time and running score.
 
 **Bonus hours.** If the CSV has hours from the rally book (step 1), a route
 only counts a bonus it reaches while it's open. It reaches one early only by
 waiting there until it opens, and that wait comes out of the time budget; it
-never reaches one after it closes. Hours are clock times, counted from the
+never reaches one after it closes, and it plans to get there at least 10
+minutes before closing (`--window-margin`), so one slow leg on the day
+doesn't cost the bonus. Hours are clock times, counted from the
 rally start (`--start`, 7:00 by default, as in the 2026 rally book). The
 table shows each bonus's hours and any wait, e.g. `waits 12 min to open at
 11:00`. `--ignore-hours` plans as if every bonus were open all day, to see
@@ -185,6 +188,7 @@ PyPy.
 | `--hours` | 9.5 | Time budget, Rally HQ to Rally HQ |
 | `--speed` | 45 | Average speed in MPH |
 | `--stop-minutes` | 5 | Time at each bonus to take its picture |
+| `--leg-minutes` | 3 | Time every leg takes on top of driving: leaving the main road, finding the bonus, parking. None between bonuses at the same spot (see below) |
 | `--road-factor` | 1.0 | Multiplies straight-line miles to approximate road miles (try 1.3) |
 | `--gas-miles` | 175 | Stop for gas each time the route passes another this many miles; 0 for none |
 | `--gas-minutes` | 10 | Time for each gas stop |
@@ -198,11 +202,36 @@ PyPy.
 | `--only` | off | Route only the `--must` and `--first` bonuses, adding nothing else |
 | `--quick` | off | Plan with the beam search instead: about 4x faster, as good on the 2026 bonuses (see [Tree search](#tree-search-beam-and-depth-first)) |
 | `--start` | 07:00 | Rally start time, for the hours bonuses are open |
+| `--window-margin` | 10 | Reach a bonus with hours at least this many minutes before it closes |
 | `--ignore-hours` | | Plan as if every bonus is open all day |
 | `--combos` | bonus-combos.csv | Combo bonuses from the rally book, used if the file exists |
 | `--ignore-combos` | | Plan without the combo bonuses |
 | `--workers` | all cores | How many CPU cores to search with |
 | `--gpx` | route-DATE-TIME-POINTSpts.gpx | Where to write the GPX file |
+
+### Leg minutes and the bonus-hours margin
+
+Driving time alone undercounts short hops. On the 174 legs in the saved
+Google checks, the 60 legs under 5 straight-line miles took Google 342
+minutes, and the planner, at the speed that best matched the rest, planned
+168 of them: 0.2 miles is 5 minutes on real roads, not 0. Every leg has a
+fixed part (off the main road, find the bonus, park, back out), so a dense
+cluster of cheap bonuses looks almost free to the planner and isn't.
+
+`--leg-minutes` adds that fixed part to every leg (except between bonuses at
+the same spot, under 0.05 miles apart). Fitted to those legs with the slow
+zones on and road factor 1.23, 3 minutes a leg and 54 MPH matched best and
+made the short legs right (336 minutes planned against Google's 342). With
+it, the planner sees what each extra stop costs and drops low-value stops
+to reach the big ones.
+
+`--window-margin` plans to reach a bonus with hours at least that many
+minutes before it closes. A route planned to reach BISH one minute before it
+closed reached it 29 minutes late on Google; the margin keeps a short
+slip from costing the bonus.
+
+Numbers quoted elsewhere in this README come from before these two
+settings; add `--leg-minutes 0 --window-margin 0` to plan as they did.
 
 ### Slow zones
 
@@ -320,10 +349,12 @@ It can't try every possible route; there are far too many.
 - Start and finish at Rally HQ, within the time budget.
 - Driving time is straight-line miles × the road factor, at the average
   speed, and 25 MPH through the Atlanta slow zone.
-- Each bonus costs the stop minutes for its photo, plus a gas stop each time
-  the miles pass another "gas every" distance.
+- Each leg costs the leg minutes (leaving the road, parking) on top of
+  driving, and each bonus the stop minutes for its photo, plus a gas stop
+  each time the miles pass another "gas every" distance.
 - A bonus reached before it opens is waited for; one that would be reached
-  after it closes can't be in the route.
+  after it closes, or within the bonus-hours margin of closing, can't be in
+  the route.
 - A combo's points count only if every bonus in it is visited.
 - First stops and must-visit bonuses, if set, are always kept. With "only",
   nothing else is added.
@@ -490,6 +521,26 @@ of requests.
 python checkRoute.py --highway-faster 10 --surface-faster 5
 ```
 
+**Fitting to Google's times.** When the route is over time or misses a
+bonus's hours on Google's times, the check looks for stops to drop so the
+rest fits and makes its hours, keeping the most points, and prints them:
+
+```
+To fit: drop MILR (458), CPTC (442), WILH (373), DRJA (255), STCH (250), EBZR (81).
+About 9875 points in 9.48 hours, estimated from Google's legs
+Fitted route written to route-fit-20261103-091500-9875pts.gpx; check it with: ...
+```
+
+Dropping early, cheaper stops can win back a big bonus later: that route
+missed BISH (960) and PROP (820) by arriving late, and dropping six small
+stops makes both. It's a beam search: drop one more stop at a time, keeping
+the 60 best partial routes. It costs nothing, because it uses the legs Google
+already gave: a leg Google drove is kept as is, and a leg that now skips a
+dropped stop is the planner's estimate for it, scaled by how Google compared
+with the planner over the legs it replaces. Those are estimates, so check
+the fitted route (`route-fit-…gpx`, the default route to check next) with
+Google before riding it.
+
 **Cost.** One request for a route of up to 25 stops, or one per leg with
 `--depart` (about 20 for a full day). Google gives 5,000 free requests a
 month of the kind that uses traffic or more than 10 stops, and 10,000 of the
@@ -512,6 +563,7 @@ for current numbers.
 | `--highway-faster` | 0 | Percent faster than Google on highways; negative for slower (-50 to 100) |
 | `--surface-faster` | 0 | The same for every other road |
 | `--highway-mph` | 55 | A step Google drives at this speed or more counts as highway |
+| `--leg-minutes` | 3 | The planner's minutes per leg, for the `--speed` it suggests and for estimating legs in a fitted route |
 
 ## Provably best route
 
@@ -758,7 +810,11 @@ one request without traffic; give a departure (Georgia time) for Google's
 traffic forecast, one request per leg. **Highways % faster** and **Other
 roads % faster** work like `--highway-faster` and `--surface-faster`; each
 mix of departure and percents is its own saved check. The same check again
-shows the saved result without asking Google.
+shows the saved result without asking Google. A check over time or missing
+a bonus's hours also shows the stops to drop to fit (see *Fitting to
+Google's times* above), with a **Make it a scenario** button: that saves the
+kept stops, in the same order, as a new scenario, ready to check with
+Google itself.
 
 Every check is billed to your Google account, so **leave this off on a
 site the public can reach**. To turn it on, add to `.env` on the server, then

@@ -69,6 +69,10 @@ NUMBERS = [
     ('hours', 'Time budget, hours', 9.5, 1, 12, 'Rally HQ to Rally HQ'),
     ('speed', 'Average speed, MPH', 45, 20, 80, 'Google checks of 2026 routes averaged 46-47'),
     ('stop_minutes', 'Minutes at each bonus', 5, 0, 30, 'to take its picture'),
+    ('leg_minutes', 'Minutes per leg', planRoute.LEG_MINUTES, 0, 15,
+     'leaving the main road, finding the bonus and parking; Google checks fit 3 (with about 54 MPH at road x1.23)'),
+    ('window_margin', 'Bonus hours margin, minutes', planRoute.WINDOW_MARGIN, 0, 60,
+     'reach a bonus with hours this long before it closes'),
     ('road_factor', 'Road factor', 1.0, 1.0, 2.0, 'road miles ÷ straight-line miles; Google checks gave 1.20-1.23'),
     ('front_load', 'Front-load', 0, 0, 5, '0 = most points; 1 trades some points for banking them earlier'),
     ('gas_miles', 'Gas stop every, miles', 175, 0, 500, '0 for no gas stops'),
@@ -216,6 +220,11 @@ def describe(settings):
     """A short line for the list of runs, e.g. '9.5 h, 46 MPH, 4 min stops, road x1.22'."""
     parts = [f"{settings['hours']:g} h", f"{settings['speed']:g} MPH", f"{settings['stop_minutes']:g} min stops",
              f"road ×{settings['road_factor']:g}"]
+    # Runs from before these settings had neither
+    if settings.get('leg_minutes'):
+        parts.append(f"{settings['leg_minutes']:g} min legs")
+    if settings.get('window_margin') and settings['use_hours']:
+        parts.append(f"hours margin {settings['window_margin']:g} min")
     if settings['front_load']:
         parts.append(f"front-load {settings['front_load']:g}")
     if settings['gas_miles'] != 175 or settings['gas_minutes'] != 10:
@@ -238,6 +247,30 @@ def describe(settings):
     return ', '.join(parts)
 
 
+def planner_args(settings):
+    """The command-line arguments planRoute's helpers read, from a run's settings."""
+    return argparse.Namespace(first=settings.get('first'), must=settings.get('must'), only=settings.get('only'),
+                              gas_miles=settings['gas_miles'], gas_minutes=settings['gas_minutes'],
+                              combos=COMBOS_CSV, ignore_combos=not settings['use_combos'])
+
+
+def make_planner(settings, args):
+    """A Planner for a run's settings, with its must-visit stops and combos;
+    returns (planner, bonuses, slow zones). Exits (SystemExit) on bad input,
+    e.g. an unknown must-visit code."""
+    hq, bonuses = planRoute.load_bonuses(BONUS_CSV)
+    slow_zones = (([planRoute.ATLANTA_SLOW_ZONE] if settings['slow_zone'] else [])
+                  + ([planRoute.ATHENS_SLOW_ZONE] if settings.get('athens_zone') else []))
+    planner = planRoute.Planner(hq, bonuses, settings['hours'], settings['speed'], settings['stop_minutes'],
+                                settings['road_factor'], settings['front_load'], slow_zones,
+                                settings['gas_miles'], settings['gas_minutes'], settings['start'],
+                                settings['use_hours'], leg_minutes=settings.get('leg_minutes', 0),
+                                window_margin=settings.get('window_margin', 0) if settings['use_hours'] else 0)
+    planRoute.apply_first(planner, args)
+    planRoute.apply_combos(planner, args)
+    return planner, bonuses, slow_zones
+
+
 @background_task
 def plan(run):
     """Run the planner for one saved run, and save the result or the error."""
@@ -246,21 +279,10 @@ def plan(run):
         newrelic.agent.add_custom_attributes([('run_id', run['id']), ('hours', settings['hours']),
                                               ('quick', bool(settings.get('quick'))),
                                               ('must', settings.get('must') or '')])
-    args = argparse.Namespace(first=settings.get('first'), must=settings.get('must'), only=settings.get('only'), gas_miles=settings['gas_miles'],
-                              gas_minutes=settings['gas_minutes'], combos=COMBOS_CSV,
-                              ignore_combos=not settings['use_combos'])
+    args = planner_args(settings)
     started = time.monotonic()
     try:
-        hq, bonuses = planRoute.load_bonuses(BONUS_CSV)
-        slow_zones = (([planRoute.ATLANTA_SLOW_ZONE] if settings['slow_zone'] else [])
-                      + ([planRoute.ATHENS_SLOW_ZONE] if settings.get('athens_zone') else []))
-        planner = planRoute.Planner(hq, bonuses, settings['hours'], settings['speed'], settings['stop_minutes'],
-                                    settings['road_factor'], settings['front_load'], slow_zones,
-                                    settings['gas_miles'], settings['gas_minutes'], settings['start'],
-                                    settings['use_hours'])
-        # The planner stops with sys.exit on bad input, e.g. an unknown --must code
-        planRoute.apply_first(planner, args)
-        planRoute.apply_combos(planner, args)
+        planner, bonuses, slow_zones = make_planner(settings, args)
         if settings.get('quick'):
             route = planRouteSearch.quick_route(planner, WORKERS)
         else:
@@ -279,10 +301,16 @@ def plan(run):
         run.update(status='error', error=f"The planner failed: {error}")
         save_worker_copy(run)
         raise
+    finish_run(run, planner, route, bonuses, slow_zones, args, round(time.monotonic() - started))
+    save_worker_copy(run)
 
+
+def finish_run(run, planner, route, bonuses, slow_zones, args, seconds):
+    """Fill in a run's route, table and GPX file, and mark it done."""
+    settings = run['settings']
     legs = list(planRoute.route_legs(planner, route))
     planRoute.write_gpx(planner, route, result_path(run['id'], 'gpx'))
-    run.update(status='done', seconds=round(time.monotonic() - started),
+    run.update(status='done', seconds=seconds,
                finished=datetime.now(timezone.utc).isoformat(timespec='seconds'),
                points=legs[-1].score, stops=len(route), miles=round(legs[-1].miles),
                hours=round(legs[-1].hours, 2),
@@ -298,7 +326,6 @@ def plan(run):
                           arrive=planRoute.time_of_day(planner, leg.arrive), score=leg.score,
                           notes=planRoute.leg_notes(planner, leg))
                      for leg in legs])
-    save_worker_copy(run)
 
 
 def worker():
@@ -422,6 +449,14 @@ def show_run(run_id):
 
 def render_run(run, google_error=None, status=200):
     run_id = run['id']
+    if any('fit' not in check for check in run.get('checks', [])) and os.path.exists(BONUS_CSV):
+        # Checks from before fits were made get theirs now, once
+        with save_lock:
+            run = load_run(run_id)
+            for check in run.get('checks', []):
+                if 'fit' not in check:
+                    check['fit'] = fit_check(run, check)
+            save_run(run)
     bonuses = []
     if run['status'] == 'done' and os.path.exists(BONUS_CSV):
         _, bonuses = planRoute.load_bonuses(BONUS_CSV)
@@ -477,7 +512,8 @@ def google_check(run, depart, check_id, faster=None):
                 requests=requests_made, points=last.score, miles=round(last.miles), hours=round(last.arrive, 2),
                 fits=last.arrive <= settings['hours'],
                 summary=checkRoute.summary_lines(places, legs, rows, windows, combos, settings['hours'],
-                                                 settings['gas_miles'], time_of_day),
+                                                 settings['gas_miles'], time_of_day,
+                                                 settings.get('leg_minutes', planRoute.LEG_MINUTES)),
                 rows=[dict(code=row.place['code'], state=row.place['state'], points=row.place['points'],
                            line_miles=round(planRoute.haversine_miles(rows[n - 1].place, row.place), 1) if n else 0,
                            road_miles=round(row.leg_miles, 1), miles=round(row.miles, 1),
@@ -487,6 +523,35 @@ def google_check(run, depart, check_id, faster=None):
                 # Google's roads for the map, to about 1 m
                 track=[[round(lat, 5), round(lon, 5)] for polyline in polylines
                        for lat, lon in checkRoute.decode_polyline(polyline)])
+
+
+def fit_check(run, check):
+    """Stops to drop so a Google check's route fits the time and makes its
+    bonuses' hours, from the check's saved legs (no more requests), as
+    checkRoute.fit_to_time finds them: {codes kept in order, dropped, points,
+    hours, miles}, or None if dropping doesn't help."""
+    settings = run['settings']
+    rows = check['rows']
+    places = [dict(code=row['code'], state=row['state'], points=row['points'], lat=leg['lat'], lon=leg['lon'])
+              for row, leg in zip(rows, run['legs'])]
+    legs = [(row['road_miles'], row['drive'] / 60) for row in rows[1:]]
+    # A traffic check's id starts with its departure, YYYYmmddHHMM, and its
+    # bonus hours count from then
+    start = f"{check['id'][8:10]}:{check['id'][10:12]}" if check['id'][:1].isdigit() else settings['start']
+    windows = checkRoute.bonus_windows(BONUS_CSV, start) if settings['use_hours'] else {}
+    combos = planRoute.load_combos(COMBOS_CSV) if settings['use_combos'] else []
+    stop_hours, gas_hours = settings['stop_minutes'] / 60, settings['gas_minutes'] / 60
+    fitted = checkRoute.fit_to_time(places, legs, stop_hours, settings['gas_miles'], gas_hours, windows, combos,
+                                    settings['hours'], settings.get('leg_minutes', planRoute.LEG_MINUTES))
+    if not fitted:
+        return None
+    fit_places, fit_legs = fitted
+    last = list(checkRoute.timeline(fit_places, fit_legs, stop_hours, settings['gas_miles'], gas_hours,
+                                    windows, combos))[-1]
+    kept = {p['code'] for p in fit_places}
+    return dict(points=last.score, hours=round(last.arrive, 2), miles=round(last.miles),
+                codes=[p['code'] for p in fit_places[1:-1]],
+                dropped=[dict(code=p['code'], points=p['points']) for p in places[1:-1] if p['code'] not in kept])
 
 
 @app.post('/run/<run_id>/google')
@@ -524,6 +589,7 @@ def start_google_check(run_id):
         if check_id not in [check['id'] for check in load_run(run_id).get('checks', [])]:
             try:
                 check = google_check(run, depart, check_id, faster)
+                check['fit'] = fit_check(run, check)
             except SystemExit as stop:
                 return render_run(run, str(stop.code).removeprefix('ERROR: '), 502)
             except Exception as error:
@@ -534,6 +600,39 @@ def start_google_check(run_id):
                 run['checks'] = [check] + run.get('checks', [])
                 save_run(run)
     return redirect(url_for('show_run', run_id=run_id, _anchor=f'google-{check_id}'))
+
+
+@app.post('/run/<run_id>/google-<check_id>/fit')
+def make_fitted_run(run_id, check_id):
+    """A new scenario with the stops a Google check's fit kept, in the same
+    order, timed by the planner, ready to check with Google itself."""
+    source = load_run(run_id)
+    check = next((c for c in source.get('checks', []) if c['id'] == check_id), None)
+    if check is None or not check.get('fit'):
+        abort(404)
+    settings = source['settings'] | dict(must=','.join(check['fit']['codes']), only=True, quick=False)
+    settings.pop('first', None)
+    key = json.dumps(settings, sort_keys=True) + data_fingerprint() + 'fit'
+    new_id = hashlib.sha256(key.encode()).hexdigest()[:12]
+    if not os.path.exists(result_path(new_id)):
+        args = planner_args(settings)
+        try:
+            planner, bonuses, slow_zones = make_planner(settings, args)
+        except SystemExit as stop:
+            return render_run(source, str(stop.code).removeprefix('ERROR: '), 400)
+        index = {place['code']: b for b, place in enumerate(planner.places)}
+        route = [index[code] for code in check['fit']['codes']]
+        dropped = ', '.join(d['code'] for d in check['fit']['dropped'])
+        run = dict(id=new_id, settings=settings, status='queued',
+                   name=f"{source.get('name') or source['id']} fitted"[:60],
+                   fitted=dict(run=run_id, check=check_id, dropped=dropped),
+                   created=datetime.now(timezone.utc).isoformat(timespec='seconds'))
+        finish_run(run, planner, route, bonuses, slow_zones, args, 0)
+        run['settings_lines'].insert(0, f"Fitted to Google's times from {run_id} ({check['source']}): "
+                                        f"dropped {dropped}; stops in the same order")
+        with save_lock:
+            save_run(run)
+    return redirect(url_for('show_run', run_id=new_id))
 
 
 @app.get('/run/<run_id>/google-<check_id>.gpx')

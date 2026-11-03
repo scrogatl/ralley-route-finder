@@ -19,6 +19,12 @@ Without --depart, the whole route goes in one request per 25 stops and the
 times have no traffic. With --depart, each leg is its own request, leaving
 when you'd leave that stop, and the times include Google's traffic forecast.
 
+If the route is over time or misses a bonus's hours on Google's times, it
+also looks for stops to drop so the rest fits, keeping the most points, and
+writes that route as route-fit-DATE-TIME-POINTSpts.gpx to check next. Legs
+that skip a dropped stop are estimated from Google's legs around them, so
+check the fitted route with Google before riding it.
+
 Google's times are for driving at about the usual speed. --highway-faster and
 --surface-faster drive that many percent faster (or slower, if negative):
 each turn-by-turn step Google averages --highway-mph or more on counts as
@@ -270,13 +276,17 @@ def row_notes(row, windows):
     return notes
 
 
-def summary_lines(places, legs, rows, windows, combos, max_hours, gas_miles, time_of_day):
+def summary_lines(places, legs, rows, windows, combos, max_hours, gas_miles, time_of_day,
+                  leg_minutes=planRoute.LEG_MINUTES):
     """The lines under the table: totals, missed hours, combos, whether it
-    fits, and the --road-factor and --speed that match Google's numbers."""
+    fits, and the --road-factor and --speed that match Google's numbers with
+    leg_minutes on each leg."""
     last = rows[-1]
     miles, hours, points = last.miles, last.arrive, last.score
     line_miles = sum(planRoute.haversine_miles(a, b) for a, b in zip(places, places[1:]))
-    drive_hours = sum(h for _, h in legs)
+    # Driving time less the planner's minutes per leg, which aren't driven at --speed
+    moving = sum(1 for a, b in zip(places, places[1:]) if planRoute.haversine_miles(a, b) > planRoute.SAME_PLACE_MILES)
+    drive_hours = sum(h for _, h in legs) - moving * leg_minutes / 60
     lines = [f"Bonuses: {len(places) - 2}   Points: {points}   Road miles: {miles:.0f}   "
              f"Gas stops: {gas_stops(miles, gas_miles)}   Hours: {hours:.2f} of {max_hours}"]
     missed = [row for row in rows if row.missed]
@@ -299,10 +309,84 @@ def summary_lines(places, legs, rows, windows, combos, max_hours, gas_miles, tim
         late = [row.place['code'] for row in rows[1:-1] if row.leave > max_hours]
         lines.append(f"OVER by {(hours - max_hours) * 60:.0f} minutes. Stops you'd leave after time runs out: "
                      f"{', '.join(late) or 'none (only the drive back is late)'}")
-    if line_miles and drive_hours:
+    if line_miles and drive_hours > 0:
         lines.append(f"To plan closer to these roads: planRoute.py --road-factor {miles / line_miles:.2f} "
-                     f"--speed {miles / drive_hours:.0f}")
+                     f"--speed {miles / drive_hours:.0f} --leg-minutes {leg_minutes:g}")
     return lines
+
+
+# How many partly dropped routes fit_to_time keeps at each step
+FIT_BEAM = 60
+
+
+def fit_to_time(places, legs, stop_hours, gas_miles, gas_hours, windows, combos, max_hours,
+                leg_minutes=planRoute.LEG_MINUTES):
+    """Find stops to drop so the route fits max_hours on Google's times and
+    makes its bonuses' hours, keeping the most points. Returns (places, legs)
+    for the fitted route, or None if dropping stops doesn't score more.
+
+    A leg Google drove is kept as it is. A leg that skips dropped stops is
+    the planner's estimate for it (straight line, slow zones and leg minutes)
+    scaled by how Google's time and miles compared with the planner's over
+    the legs it replaces. Beam search: drop one more stop at a time, keeping
+    the FIT_BEAM best routes, those over time ranked by points less a charge
+    for each hour over."""
+    zones = [planRoute.ATLANTA_SLOW_ZONE, planRoute.ATHENS_SLOW_ZONE]
+
+    def estimate(a, b):
+        line = planRoute.haversine_miles(a, b)
+        extra = leg_minutes / 60 if line > planRoute.SAME_PLACE_MILES else 0
+        return line, planRoute.Planner.leg_hours(a, b, line, 60, zones) + extra
+
+    # Running totals over the legs, so any skipped run is two lookups
+    totals = [(0, 0, 0, 0)]
+    for (a, b), (miles, hours) in zip(zip(places, places[1:]), legs):
+        line, model = estimate(a, b)
+        last = totals[-1]
+        totals.append((last[0] + miles, last[1] + hours, last[2] + line, last[3] + model))
+
+    def leg(i, j):
+        if j == i + 1:
+            return legs[i]
+        miles, hours, line, model = (totals[j][k] - totals[i][k] for k in range(4))
+        new_line, new_model = estimate(places[i], places[j])
+        return (new_line * miles / line if line else miles), (new_model * hours / model if model else hours)
+
+    def evaluate(keep):
+        stops = (0,) + keep + (len(places) - 1,)
+        route_legs = [leg(i, j) for i, j in zip(stops, stops[1:])]
+        last = list(timeline([places[k] for k in stops], route_legs, stop_hours, gas_miles, gas_hours,
+                             windows, combos))[-1]
+        return last.score, last.arrive, route_legs
+
+    full = tuple(range(1, len(places) - 1))
+    points, hours, _ = evaluate(full)
+    best = (points, -hours, full) if hours <= max_hours else None
+    # Points an hour over is worth giving up, to rank routes still over time
+    charge = 2 * points / max(hours, 1)
+    beam, seen = [full], {full}
+    while beam:
+        ranked = []
+        for keep in beam:
+            for k in range(len(keep)):
+                child = keep[:k] + keep[k + 1:]
+                if child in seen:
+                    continue
+                seen.add(child)
+                points, hours, _ = evaluate(child)
+                ranked.append((points - max(0, hours - max_hours) * charge, points, -hours, child))
+                if hours <= max_hours and (best is None or (points, -hours) > best[:2]):
+                    best = (points, -hours, child)
+        ranked.sort(reverse=True)
+        # Once every route kept fits, dropping more only loses points
+        if not ranked or (best and all(-r[2] <= max_hours for r in ranked[:FIT_BEAM])
+                          and ranked[0][1] <= best[0]):
+            break
+        beam = [r[3] for r in ranked[:FIT_BEAM]]
+    if best is None or best[2] == full:
+        return None
+    keep = (0,) + best[2] + (len(places) - 1,)
+    return [places[k] for k in keep], evaluate(best[2])[2]
 
 
 def write_gpx(rows, polylines, max_hours, source, gpx_file_path):
@@ -340,9 +424,11 @@ def write_gpx(rows, polylines, max_hours, source, gpx_file_path):
     ET.SubElement(rte, f'{{{GPX_NS}}}desc').text = summary
     for n, row in enumerate(rows):
         add_point(rte, 'rtept', row, n)
-    trk = ET.SubElement(gpx, f'{{{GPX_NS}}}trk')
-    ET.SubElement(trk, f'{{{GPX_NS}}}name').text = f"Rally roads {last.score} points"
-    ET.SubElement(trk, f'{{{GPX_NS}}}desc').text = summary
+    # A fitted route has no Google roads yet, so no track
+    if polylines:
+        trk = ET.SubElement(gpx, f'{{{GPX_NS}}}trk')
+        ET.SubElement(trk, f'{{{GPX_NS}}}name').text = f"Rally roads {last.score} points"
+        ET.SubElement(trk, f'{{{GPX_NS}}}desc').text = summary
     for polyline in polylines:
         segment = ET.SubElement(trk, f'{{{GPX_NS}}}trkseg')
         for lat, lon in decode_polyline(polyline):
@@ -377,6 +463,9 @@ def main():
                              '(default 0)')
     parser.add_argument('--surface-faster', type=float, default=0, metavar='PERCENT',
                         help='the same for every other road (default 0)')
+    parser.add_argument('--leg-minutes', type=float, default=planRoute.LEG_MINUTES,
+                        help='the planner\'s minutes per leg: for the --speed it suggests, and to estimate legs '
+                             f'that skip a dropped stop (default {planRoute.LEG_MINUTES})')
     parser.add_argument('--highway-mph', type=float, default=HIGHWAY_MPH,
                         help=f'a step Google drives at this speed or more is highway (default {HIGHWAY_MPH})')
     planRoute.add_gas_args(parser)
@@ -422,12 +511,29 @@ def main():
               f"{row.leave:>6.2f} {time_of_day(row.arrive):>6} {row.score:>6}{'  ' + '; '.join(notes) if notes else ''}")
 
     print()
-    for line in summary_lines(places, legs, rows, windows, combos, args.hours, args.gas_miles, time_of_day):
+    for line in summary_lines(places, legs, rows, windows, combos, args.hours, args.gas_miles, time_of_day,
+                              args.leg_minutes):
         print(line)
     points = rows[-1].score
     gpx = args.gpx or planRoute.stamped_gpx_name('route-google', points)
     write_gpx(rows, polylines, args.hours, source, gpx)
     print(f"\nGPX written to {gpx}")
+
+    fitted = fit_to_time(places, legs, stop_hours, args.gas_miles, gas_hours, windows, combos, args.hours,
+                         args.leg_minutes)
+    if fitted:
+        fit_places, fit_legs = fitted
+        fit_rows = list(timeline(fit_places, fit_legs, stop_hours, args.gas_miles, gas_hours, windows, combos))
+        last = fit_rows[-1]
+        kept = {p['code'] for p in fit_places}
+        dropped = [p for p in places[1:-1] if p['code'] not in kept]
+        drops = ', '.join(f"{p['code']} ({p['points']})" for p in dropped)
+        print(f"\nTo fit: drop {drops}. "
+              f"About {last.score} points in {last.arrive:.2f} hours, estimated from Google's legs")
+        fit_gpx = planRoute.stamped_gpx_name('route-fit', last.score)
+        write_gpx(fit_rows, [], args.hours, f"{source}, fitted by dropping stops (estimated)", fit_gpx)
+        print(f"Fitted route written to {fit_gpx}; check it with: python checkRoute.py {fit_gpx}"
+              + (f" --depart \"{args.depart:%Y-%m-%d %H:%M}\"" if args.depart else ''))
 
 
 if __name__ == "__main__":

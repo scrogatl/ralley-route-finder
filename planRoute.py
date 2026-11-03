@@ -7,11 +7,13 @@ Distances are straight-line (great circle) miles between bonuses, so they
 are rough: real roads are longer. Use --road-factor to pad them (1.3 is a
 common rule of thumb). The route starts and ends at Rally HQ and must fit
 in the time budget, including 5 minutes (--stop-minutes) at each bonus to
-take its picture, a 10-minute gas stop every 175 miles (--gas-miles,
+take its picture, 3 minutes on every leg for getting off the main road and
+parking (--leg-minutes), a 10-minute gas stop every 175 miles (--gas-miles,
 --gas-minutes), and slower driving through Atlanta (--slow-zone). If the
 CSV has the hours bonuses are open (from the rally book, see
 extractDatafromGPX.py), a bonus only counts while it's open, waiting there
-if you arrive early (--start sets the rally start, --ignore-hours skips it).
+if you arrive early, and reached at least 10 minutes before it closes
+(--window-margin; --start sets the rally start, --ignore-hours skips it).
 Combo bonuses (bonus-combos.csv, also from the rally book) add their points
 when the route has every bonus in the combo (--ignore-combos skips them).
 
@@ -46,6 +48,18 @@ START_WEIGHTS = (0.5, 0.75, 1.0, 1.5, 2.0)
 
 # The rally book's start time; bonus hours are counted from it
 RALLY_START = '07:00'
+
+# Minutes every leg takes on top of driving, for leaving the main road,
+# finding the bonus and parking (--leg-minutes). Fitted to 174 legs of 2026
+# Google checks: with it, legs under 5 miles take Google's time (336 min vs
+# 342) where without it they took half; the best speed then is about 54 MPH
+# at road factor 1.23
+LEG_MINUTES = 3
+# Bonuses this close together (in miles) are one stop's walk apart: no leg time
+SAME_PLACE_MILES = 0.05
+# Reach a bonus with hours at least this many minutes before it closes
+# (--window-margin), so a slower leg doesn't miss it
+WINDOW_MARGIN = 10
 
 
 def load_bonuses(csv_file_path):
@@ -216,9 +230,23 @@ def start_time(text):
     raise argparse.ArgumentTypeError(f"'{text}' isn't a 24-hour HH:MM time, e.g. 07:00")
 
 
+def add_leg_args(parser):
+    parser.add_argument('--leg-minutes', type=float, default=LEG_MINUTES,
+                        help='minutes every leg takes on top of driving, for leaving the main road, finding the '
+                             f'bonus and parking; not between bonuses at the same spot (default {LEG_MINUTES})')
+
+
+def timing_options(args):
+    """Planner's leg_minutes and window_margin from the command line."""
+    return dict(leg_minutes=args.leg_minutes, window_margin=0 if args.ignore_hours else args.window_margin)
+
+
 def add_hours_args(parser):
     parser.add_argument('--start', default=RALLY_START, type=start_time,
                         help=f'rally start time, HH:MM, for the hours bonuses are open (default {RALLY_START})')
+    parser.add_argument('--window-margin', type=float, default=WINDOW_MARGIN, metavar='MINUTES',
+                        help='reach a bonus with hours at least this many minutes before it closes, so a slower '
+                             f'leg on the day doesn\'t miss it (default {WINDOW_MARGIN})')
     parser.add_argument('--ignore-hours', action='store_true',
                         help="plan as if every bonus is open all day, ignoring the rally book's hours")
 
@@ -227,7 +255,9 @@ def describe_hours(planner):
     timed = [p for p in planner.places if p.get('opens')]
     if not planner.windows:
         return f"start {planner.start}, " + ("bonus hours ignored" if timed else "no bonus hours in file")
-    return f"start {planner.start}, " + ", ".join(f"{p['code']} open {p['opens']}-{p['closes']}" for p in timed)
+    margin = f", reached {planner.window_margin:g} min before closing" if planner.window_margin else ''
+    return (f"start {planner.start}, " + ", ".join(f"{p['code']} open {p['opens']}-{p['closes']}" for p in timed)
+            + margin)
 
 
 def describe_first(planner):
@@ -270,7 +300,7 @@ class Planner:
     """Stops are indexes into self.places; index 0 is Rally HQ."""
 
     def __init__(self, hq, bonuses, hours, speed, stop_minutes, road_factor, front_load, slow_zones=(),
-                 gas_miles=0, gas_minutes=0, start=RALLY_START, use_hours=True):
+                 gas_miles=0, gas_minutes=0, start=RALLY_START, use_hours=True, leg_minutes=0, window_margin=0):
         self.places = [hq] + bonuses
         self.start = start
         self.max_hours = hours
@@ -282,7 +312,10 @@ class Planner:
         # Estimated road miles, and travel time in hours, between every pair of places
         self.miles = [[haversine_miles(self.places[i], self.places[j]) * road_factor
                        for j in range(n)] for i in range(n)]
+        self.leg_minutes = leg_minutes
+        self.window_margin = window_margin
         self.hours = [[self.leg_hours(self.places[i], self.places[j], self.miles[i][j], speed, slow_zones)
+                       + (leg_minutes / 60 if self.miles[i][j] > SAME_PLACE_MILES * road_factor else 0)
                        for j in range(n)] for i in range(n)]
         # Cached for insert_greedily's inner loop: hours_to[j][i] is hours[i][j]
         self.hours_to = [list(column) for column in zip(*self.hours)]
@@ -305,8 +338,10 @@ class Planner:
         if use_hours:
             for i, place in enumerate(self.places):
                 if place.get('opens'):
-                    windows[i] = (clock_hours(place['opens']) - clock_hours(start),
-                                  clock_hours(place['closes']) - clock_hours(start))
+                    opens = clock_hours(place['opens']) - clock_hours(start)
+                    # The last time to arrive, window_margin before it closes
+                    closes = clock_hours(place['closes']) - clock_hours(start) - window_margin / 60
+                    windows[i] = (opens, max(opens, closes))
         self.windows = windows if any(windows) else None
 
     @staticmethod
@@ -1004,6 +1039,7 @@ def main():
     parser.add_argument('--gpx',
                         help='also write the route as GPX for Garmin BaseCamp and GPS units '
                              '(default route-DATE-TIME-POINTSpts.gpx)')
+    add_leg_args(parser)
     add_slow_zone_args(parser)
     add_gas_args(parser)
     add_first_args(parser)
@@ -1014,7 +1050,8 @@ def main():
     hq, bonuses = load_bonuses(args.csv_file)
     slow_zones = slow_zones_from_args(args)
     planner = Planner(hq, bonuses, args.hours, args.speed, args.stop_minutes, args.road_factor, args.front_load,
-                      slow_zones, args.gas_miles, args.gas_minutes, args.start, not args.ignore_hours)
+                      slow_zones, args.gas_miles, args.gas_minutes, args.start, not args.ignore_hours,
+                      **timing_options(args))
     apply_first(planner, args)
     apply_combos(planner, args)
     if args.quick:
@@ -1025,7 +1062,7 @@ def main():
     else:
         route = planner.solve(START_WEIGHTS, args.max_drop, max(1, args.workers))
     print(f"{len(bonuses)} bonuses, {args.hours} hours at {args.speed} MPH, "
-          f"{args.stop_minutes:g} min per stop, road factor {args.road_factor:g}, "
+          f"{args.stop_minutes:g} min per stop, {args.leg_minutes:g} per leg, road factor {args.road_factor:g}, "
           f"front-load {args.front_load:g}" + (", quick (beam search)" if args.quick else ""))
     print(f"{describe_gas(args)}, {describe_slow_zones(slow_zones)}, {describe_first(planner)}")
     print(f"{describe_hours(planner)}")

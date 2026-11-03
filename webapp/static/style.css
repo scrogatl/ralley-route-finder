@@ -114,6 +114,8 @@ details { margin-top: 12px; }
 .google-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; margin-bottom: 8px; }
 .google-form .field { min-width: 220px; }
 .google-form .field.percent { min-width: 0; width: 130px; }
+form.fit p { margin: 8px 0; }
+form.fit button { margin-left: 8px; padding: 4px 12px; }
 input[type=datetime-local] {
   font: inherit; padding: 6px 9px; border: 1px solid var(--line); border-radius: 6px;
   background: var(--bg); color: var(--text);

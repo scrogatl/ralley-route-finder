@@ -179,6 +179,14 @@
       </div>
       <div class="summary">
         {% for line in check.summary %}<p>{{ line }}</p>{% endfor %}
+        {% if check.fit %}
+        <form method="post" action="{{ url_for('make_fitted_run', run_id=run.id, check_id=check.id) }}" class="fit">
+          <p><strong>To fit:</strong> drop {% for d in check.fit.dropped %}{{ d.code }} ({{ d.points }}){{ ', ' if not loop.last }}{% endfor %}.
+            About <strong>{{ '{:,}'.format(check.fit.points) }} points</strong> in {{ check.fit.hours }} hours,
+            estimated from Google's legs.
+            <button type="submit" class="secondary">Make it a scenario</button></p>
+        </form>
+        {% endif %}
       </div>
       <p class="actions"><a class="button secondary" href="{{ url_for('google_gpx', run_id=run.id, check_id=check.id) }}">Download Google GPX</a></p>
     </details>
