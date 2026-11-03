@@ -441,7 +441,8 @@ def write_gpx(rows, polylines, max_hours, source, gpx_file_path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('gpx_file', nargs='?', help='GPX file to check (default the newest route*.gpx here)')
-    parser.add_argument('--hours', type=float, default=9.5, help='time budget in hours (default 9.5)')
+    parser.add_argument('--hours', type=float, default=planRoute.DEFAULT_HOURS,
+                        help=f'time budget in hours (default {planRoute.DEFAULT_HOURS:g})')
     parser.add_argument('--stop-minutes', type=float, default=5,
                         help='time spent at each bonus taking its picture (default 5)')
     parser.add_argument('--depart', type=datetime.fromisoformat,

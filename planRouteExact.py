@@ -252,12 +252,15 @@ def solve_exact(planner, time_limit, workers, hint):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('csv_file', nargs='?', default='bonus-lat-lon-points.csv')
-    parser.add_argument('--hours', type=float, default=9.5, help='time budget in hours (default 9.5)')
-    parser.add_argument('--speed', type=float, default=45, help='average speed in MPH (default 45)')
+    parser.add_argument('--hours', type=float, default=planRoute.DEFAULT_HOURS,
+                        help=f'time budget in hours (default {planRoute.DEFAULT_HOURS:g})')
+    parser.add_argument('--speed', type=float, default=planRoute.DEFAULT_SPEED,
+                        help=f'average speed in MPH (default {planRoute.DEFAULT_SPEED:g})')
     parser.add_argument('--stop-minutes', type=float, default=5,
                         help='time spent at each bonus taking its picture (default 5)')
-    parser.add_argument('--road-factor', type=float, default=1.0,
-                        help='multiply straight-line miles by this to approximate road miles (default 1.0)')
+    parser.add_argument('--road-factor', type=float, default=planRoute.DEFAULT_ROAD_FACTOR,
+                        help='multiply straight-line miles by this to approximate road miles '
+                             f'(default {planRoute.DEFAULT_ROAD_FACTOR:g})')
     parser.add_argument('--time-limit', type=float, default=600,
                         help='stop after this many seconds and report the best route so far (default 600)')
     parser.add_argument('--workers', type=int, default=os.cpu_count(),

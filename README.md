@@ -185,11 +185,11 @@ PyPy.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `--hours` | 9.5 | Time budget, Rally HQ to Rally HQ |
-| `--speed` | 45 | Average speed in MPH |
+| `--hours` | 10 | Time budget, Rally HQ to Rally HQ |
+| `--speed` | 50 | Average speed in MPH |
 | `--stop-minutes` | 5 | Time at each bonus to take its picture |
 | `--leg-minutes` | 3 | Time every leg takes on top of driving: leaving the main road, finding the bonus, parking. None between bonuses at the same spot (see below) |
-| `--road-factor` | 1.0 | Multiplies straight-line miles to approximate road miles (try 1.3) |
+| `--road-factor` | 1.23 | Multiplies straight-line miles to approximate road miles (Google checks of 2026 routes gave 1.20-1.23) |
 | `--gas-miles` | 175 | Stop for gas each time the route passes another this many miles; 0 for none |
 | `--gas-minutes` | 10 | Time for each gas stop |
 | `--slow-zone` | Atlanta | `LAT,LON,RADIUS_MILES,MPH`: the part of any leg inside this circle goes at MPH. Repeat for more zones; the default is `33.78,-84.39,15,25` |
@@ -552,7 +552,7 @@ for current numbers.
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `--depart` | none | When you leave Rally HQ; turns on the traffic forecast |
-| `--hours` | 9.5 | Time budget, Rally HQ to Rally HQ |
+| `--hours` | 10 | Time budget, Rally HQ to Rally HQ |
 | `--stop-minutes` | 5 | Time at each bonus to take its picture |
 | `--gas-miles` | 175 | Stop for gas each time the route passes another this many miles; 0 for none |
 | `--gas-minutes` | 10 | Time for each gas stop |

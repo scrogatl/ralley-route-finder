@@ -13,6 +13,7 @@ there, and how far it is from Rally HQ. Bonus hours and combos are ignored.
     python findClusters.py bonus-lat-lon-points.csv --radius 20 --top 8
 """
 import argparse, math
+import planRoute
 from planRoute import load_bonuses, haversine_miles
 
 
@@ -63,11 +64,13 @@ def main():
     parser.add_argument('--top', type=int, default=10, help='how many clusters to list (default 10)')
     parser.add_argument('--min-bonuses', type=int, default=2,
                         help='smallest number of bonuses that counts as a cluster (default 2)')
-    parser.add_argument('--speed', type=float, default=45, help='average speed in MPH (default 45)')
+    parser.add_argument('--speed', type=float, default=planRoute.DEFAULT_SPEED,
+                        help=f'average speed in MPH (default {planRoute.DEFAULT_SPEED:g})')
     parser.add_argument('--stop-minutes', type=float, default=5,
                         help='time spent at each bonus taking its picture (default 5)')
-    parser.add_argument('--road-factor', type=float, default=1.0,
-                        help='multiply straight-line miles by this to approximate road miles (default 1.0)')
+    parser.add_argument('--road-factor', type=float, default=planRoute.DEFAULT_ROAD_FACTOR,
+                        help='multiply straight-line miles by this to approximate road miles '
+                             f'(default {planRoute.DEFAULT_ROAD_FACTOR:g})')
     args = parser.parse_args()
 
     hq, bonuses = load_bonuses(args.csv_file)

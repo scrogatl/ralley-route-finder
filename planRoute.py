@@ -46,6 +46,13 @@ ATHENS_SLOW_ZONE = dict(lat=33.951, lon=-83.376, radius=3, mph=20)
 # search improves every one and keeps the best
 START_WEIGHTS = (0.5, 0.75, 1.0, 1.5, 2.0)
 
+# Defaults for every planner and the web app's form: Google checks of 2026
+# routes gave road factors of 1.20-1.23, and with LEG_MINUTES a speed of
+# about 50-54 MPH
+DEFAULT_HOURS = 10
+DEFAULT_SPEED = 50
+DEFAULT_ROAD_FACTOR = 1.23
+
 # The rally book's start time; bonus hours are counted from it
 RALLY_START = '07:00'
 
@@ -1018,12 +1025,15 @@ def print_route(planner, route):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('csv_file', nargs='?', default='bonus-lat-lon-points.csv')
-    parser.add_argument('--hours', type=float, default=9.5, help='time budget in hours (default 9.5)')
-    parser.add_argument('--speed', type=float, default=45, help='average speed in MPH (default 45)')
+    parser.add_argument('--hours', type=float, default=DEFAULT_HOURS,
+                        help=f'time budget in hours (default {DEFAULT_HOURS:g})')
+    parser.add_argument('--speed', type=float, default=DEFAULT_SPEED,
+                        help=f'average speed in MPH (default {DEFAULT_SPEED:g})')
     parser.add_argument('--stop-minutes', type=float, default=5,
                         help='time spent at each bonus taking its picture (default 5)')
-    parser.add_argument('--road-factor', type=float, default=1.0,
-                        help='multiply straight-line miles by this to approximate road miles (default 1.0)')
+    parser.add_argument('--road-factor', type=float, default=DEFAULT_ROAD_FACTOR,
+                        help='multiply straight-line miles by this to approximate road miles '
+                             f'(default {DEFAULT_ROAD_FACTOR:g})')
     parser.add_argument('--max-drop', type=int, default=6,
                         help='longest run of stops the search tries dropping at once; more is slower (default 6)')
     parser.add_argument('--front-load', type=float, default=0,

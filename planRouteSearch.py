@@ -413,12 +413,15 @@ def main():
                         help=f'beam: CPU cores to expand routes on (default all, {os.cpu_count()} here)')
     parser.add_argument('--polish', action='store_true',
                         help="then improve the result with planRoute.py's drop-and-reinsert search")
-    parser.add_argument('--hours', type=float, default=9.5, help='time budget in hours (default 9.5)')
-    parser.add_argument('--speed', type=float, default=45, help='average speed in MPH (default 45)')
+    parser.add_argument('--hours', type=float, default=planRoute.DEFAULT_HOURS,
+                        help=f'time budget in hours (default {planRoute.DEFAULT_HOURS:g})')
+    parser.add_argument('--speed', type=float, default=planRoute.DEFAULT_SPEED,
+                        help=f'average speed in MPH (default {planRoute.DEFAULT_SPEED:g})')
     parser.add_argument('--stop-minutes', type=float, default=5,
                         help='time spent at each bonus taking its picture (default 5)')
-    parser.add_argument('--road-factor', type=float, default=1.0,
-                        help='multiply straight-line miles by this to approximate road miles (default 1.0)')
+    parser.add_argument('--road-factor', type=float, default=planRoute.DEFAULT_ROAD_FACTOR,
+                        help='multiply straight-line miles by this to approximate road miles '
+                             f'(default {planRoute.DEFAULT_ROAD_FACTOR:g})')
     parser.add_argument('--gpx',
                         help='also write the route as GPX for Garmin BaseCamp and GPS units '
                              '(default route-search-DATE-TIME-POINTSpts.gpx)')

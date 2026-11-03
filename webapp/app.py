@@ -66,14 +66,15 @@ MAX_QUEUED = 10
 
 # The form: (name, label, default, lowest, highest, help)
 NUMBERS = [
-    ('hours', 'Time budget, hours', 9.5, 1, 12, 'Rally HQ to Rally HQ'),
-    ('speed', 'Average speed, MPH', 45, 20, 80, 'Google checks of 2026 routes averaged 46-47'),
+    ('hours', 'Time budget, hours', planRoute.DEFAULT_HOURS, 1, 12, 'Rally HQ to Rally HQ'),
+    ('speed', 'Average speed, MPH', planRoute.DEFAULT_SPEED, 20, 80,
+     'with minutes per leg, Google checks of 2026 routes fit 50-54'),
     ('stop_minutes', 'Minutes at each bonus', 5, 0, 30, 'to take its picture'),
     ('leg_minutes', 'Minutes per leg', planRoute.LEG_MINUTES, 0, 15,
      'leaving the main road, finding the bonus and parking; Google checks fit 3 (with about 54 MPH at road x1.23)'),
     ('window_margin', 'Bonus hours margin, minutes', planRoute.WINDOW_MARGIN, 0, 60,
      'reach a bonus with hours this long before it closes'),
-    ('road_factor', 'Road factor', 1.0, 1.0, 2.0, 'road miles ÷ straight-line miles; Google checks gave 1.20-1.23'),
+    ('road_factor', 'Road factor', planRoute.DEFAULT_ROAD_FACTOR, 1.0, 2.0, 'road miles ÷ straight-line miles; Google checks gave 1.20-1.23'),
     ('front_load', 'Front-load', 0, 0, 5, '0 = most points; 1 trades some points for banking them earlier'),
     ('gas_miles', 'Gas stop every, miles', 175, 0, 500, '0 for no gas stops'),
     ('gas_minutes', 'Minutes per gas stop', 10, 0, 60, ''),
