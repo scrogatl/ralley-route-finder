@@ -586,8 +586,11 @@ could still score, updated every 5 seconds. It ends with one of:
   how much might be missing. Raise `--time-limit` to keep going.
 
 It starts from `planRoute.py`'s best route, so it never reports a worse one.
-With the 2026 bonuses and default settings, it proves days up to 8 hours
-in a few minutes:
+The tables below were measured under the settings before leg minutes, the
+bonus-hours margin and the current defaults (see [Can the absolute best
+route be found?](#can-the-absolute-best-route-be-found) for today's
+numbers). With the 2026 bonuses and those older settings, it proved days up
+to 8 hours in a few minutes:
 
 | Day | Proven best | Solve time | `planRoute.py` |
 | --- | --- | --- | --- |
@@ -597,8 +600,8 @@ in a few minutes:
 | 8 h | 8,774 | 4½ min | 8,655 |
 
 So `planRoute.py` usually finds the best route, but not always (119 points
-short at 8 hours). A full 9.5-hour day is much harder to prove; give it a
-long `--time-limit` and check how big the remaining gap is.
+short at 8 hours). A full day is much harder to prove; give it a long
+`--time-limit` and check how big the remaining gap is.
 
 With the 2026 bonus hours, it proves the same points as `planRoute.py` for
 4, 5 and 6 hours: 2,974, 3,661 and 5,253, in 7 s, 3 min and 8 min. The hours
@@ -612,6 +615,59 @@ The solver works in hundredths of a second and rounds driving times up to
 be safe, so it could rule out a route that fits with less than a second to
 spare. If `planRoute.py` finds such a route scoring more, it reports that
 route instead, marked `NOT PROVEN`.
+
+### Can the absolute best route be found?
+
+Under the planner's assumptions, in principle; for a full day with these
+tools, no. On real roads, no.
+
+**Under the planner's assumptions.** With the current defaults (10 hours,
+50 MPH, road factor 1.23, 3 leg minutes, 10-minute hours margin),
+`planRoute.py` found 8,487 points in 3½ minutes. `planRouteExact.py`,
+starting from that route with 8 cores and `--time-limit 600`, found nothing
+better and could only show that no route scores more than 11,529: a 26%
+gap. Its bound fell quickly at first (18,738 after 1 minute, 12,521 after 4)
+and then slowly (11,529 at 10), so more time won't close it. Nothing else
+tried did better, measured with 10 minutes each:
+
+| Tried | Most any route could score | Gap |
+| --- | --- | --- |
+| CP-SAT, defaults | 11,529 | 26% |
+| CP-SAT, `linearization_level=2` | 11,519 | 26% |
+| CP-SAT, bonus hours ignored (a looser problem) | 11,978 | 28% |
+| SCIP mixed-integer model, stop times by big-M | 25,343 | 66% |
+| Linear relaxation with subtour cuts, no hours | about 17,600 | 52% |
+| Points-per-hour knapsack bound | 35,722 | |
+
+Shorter days aren't proven quickly any more either: under the current
+settings, 7 hours was left with a 10% gap after 5 minutes, and 8 hours 25%.
+
+The gap is the bound's fault, not missing points: the 2026 bonuses are
+dense (55 pairs within 10 minutes of each other, where a typical leg on the
+route takes about 30), and that lets the solver's relaxation "half visit"
+bonuses all over the state on half the driving. Bonus hours, gas stops and
+pruning unreachable bonuses (all 134 are reachable) aren't the cause.
+Proving a full day would take a different kind of solver, column generation
+with branch-and-price and orienteering-specific cuts: research-level work,
+with no promise it works on this data.
+
+It isn't worth it. Where days were proven (4-8 hours, under the older
+settings), `planRoute.py` matched the best or came within 1.4%, and on the
+full day the heuristic, the beam search and 10 minutes of CP-SAT all stop
+at 8,487. The planner's times differ from Google's by tens of minutes a
+day, worth one or two bonuses (500-1,000+ points), more than the heuristic
+is likely to leave behind.
+
+**On real roads.** A provable best on Google's times needs Google's time
+for every pair of places: about 18,000 legs for 134 bonuses and Rally HQ,
+roughly $40-180 with the Routes API's route matrix at 2025 list prices
+(estimated, not quoted). Even then it's best for one set of fixed times;
+traffic and real stop times vary on the day.
+
+**What to do instead:** plan a few strong, different routes (`planRoute.py`,
+`--quick`, `planRouteExact.py` from them), check the best few with Google,
+use the fit to drop stops where they're over, and refit `--speed` and
+`--road-factor` from the checks.
 
 ## Tree search (beam and depth-first)
 
@@ -665,8 +721,9 @@ The cut-offs:
 
 With `--method dfs --branch 0` and h-weight 1, nothing is cut off that could
 do better, so if it finishes before the time limit, no route scores more. It
-prints `no route scores more` when that happens. With default settings it
-proves the same bests as `planRouteExact.py`, often faster:
+prints `no route scores more` when that happens. With the settings before
+leg minutes and the hours margin, it proved the same bests as
+`planRouteExact.py`, often faster:
 
 | Day | Proven best | `planRouteSearch.py` | `planRouteExact.py` |
 | --- | --- | --- | --- |
