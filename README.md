@@ -29,6 +29,10 @@ book) live in their own folder, e.g. `SNAFU_2026/`.
 
 1. ### Create combined csv with bonus, lat, lon, points, state and hours, and the combos
 
+    If your rally's files aren't laid out like SNAFU's, skip this step and
+    write the planner's two files yourself; see [Input file
+    formats](#input-file-formats).
+
     Uses the lat/lon from the GPX file (the lat/lon in the CSV may be wrong) and
     the points from the CSV. Always writes `bonus-lat-lon-points.csv` in the
     current directory, overwriting any previous one.
@@ -107,6 +111,101 @@ book) live in their own folder, e.g. `SNAFU_2026/`.
     If it prints `OVER`, or the planned and real times differ a lot, plan
     again with the `--road-factor` and `--speed` it suggests, and check the
     new route.
+
+## Input file formats
+
+### What the planners read
+
+Everything that plans or checks a route (`planRoute.py`,
+`planRouteExact.py`, `planRouteSearch.py`, `findClusters.py`,
+`checkRoute.py` and the web app) reads just two files. `extractDatafromGPX.py`
+writes them from SNAFU's files, but you can make them any way you like, e.g.
+from a spreadsheet saved as CSV.
+
+**`bonus-lat-lon-points.csv`**: one line per bonus, plus one for Rally HQ.
+No header row (one would be skipped with a warning).
+
+```
+ABAC, 31.4813266787678, -83.526049414649606,510, GA, ,
+BISH, 32.412236854434013, -81.78479871712625,960, GA, 11:00, 13:00
+Rally HQ Warner Robins, 32.618909021839499, -83.69694602675736,0, N/A, ,
+```
+
+| Column | Meaning |
+| --- | --- |
+| 1. code | The bonus's code, e.g. `BISH`. Unique, no commas or spaces; use capitals, since the web app capitalizes must-visit codes. |
+| 2. lat | Latitude in decimal degrees, e.g. `32.4122` |
+| 3. lon | Longitude in decimal degrees; negative west of Greenwich, e.g. `-81.7848` |
+| 4. points | Whole number. A line whose points aren't a number (e.g. `ERROR`) is skipped with a warning. |
+| 5. state | Any text, e.g. `GA` or `N/A`; shown in the route table and counted as "States". |
+| 6. opens | Optional: 24-hour `HH:MM` the bonus opens, e.g. `11:00` |
+| 7. closes | Optional: 24-hour `HH:MM` it closes, e.g. `13:00` |
+
+- **Rally HQ** is the line whose code contains `Rally` (capital R), e.g.
+  `Rally HQ Warner Robins`. Every route starts and ends there; its points are
+  ignored. There must be exactly one; the planners stop if there's none.
+- **Hours** are clock times on the rally day, counted from `--start` (7:00
+  by default). Leave both blank, or leave the columns off, for a bonus open
+  all day. Give both or neither, closing after opening; hours that run past
+  midnight aren't supported.
+- The first five columns are required on every line; spaces around values
+  are ignored.
+
+**`bonus-combos.csv`** (optional): one line per combo, no header. Its points
+come on top of the bonuses' own points, once the route has every bonus in
+it.
+
+```
+CMB3, 3500, BISH GSUE STRU WJMS WWRD
+```
+
+| Column | Meaning |
+| --- | --- |
+| 1. code | The combo's code; not one of the bonus codes |
+| 2. points | Whole number |
+| 3. bonuses | The bonus codes it needs, separated by spaces (not commas) |
+
+A combo naming a bonus that isn't in `bonus-lat-lon-points.csv` is skipped
+with a warning. Without the file, routes are planned with no combos.
+
+The planners read both files from the current directory (`planRoute.py`
+also takes the bonus file's name as its argument, and `--combos` names the
+combo file); the web app reads them from `DATA_DIR` (`data/` in Docker).
+
+### What the extractor expects
+
+`extractDatafromGPX.py` builds those two files from three of the rally's
+files. It's written for SNAFU's layout; if yours differ, either change it
+or write the two files above directly.
+
+**The bonus CSV** (first argument). Only column 1, the code, and column 4,
+the points, are used; columns 2 and 3 (the CSV's lat/lon, in any format) are
+ignored in favor of the GPX, and any later columns too. A header row is
+fine: it matches no waypoint, so it's ignored. UTF-8 or Windows (Excel)
+encoding.
+
+```
+CODE,LAT,LONG,POINTS,AVAIL
+ABAC,N31 28.880' ,W83 31.563',510,
+```
+
+**The GPX file** (second argument). One `<wpt>` per bonus, with its
+`lat`/`lon` attributes and a `<name>` that matches the CSV's code exactly
+(`ABAC`, not `ABAC - Abraham Baldwin`). One waypoint has `Rally` in its name
+for Rally HQ. The state comes from a Garmin `State` extension (as BaseCamp
+writes it); without one it's `N/A`. Waypoints with no matching code in the
+CSV are written with `ERROR` points and a warning.
+
+**The rally book PDF** (optional third argument), for hours and combos. It
+must be a PDF with real text, not a scan. The extractor looks for:
+
+- **Hours:** each bonus's entry starts with a line beginning with its code,
+  followed by a line with `Available: 24 hours` or `Available: 11:00 AM –
+  1:00 PM` (12-hour times; a dash or en dash). A bonus with no `Available:`
+  line gets a warning and is treated as open all day.
+- **Combos:** a section headed `COMBINATION BONUSES`, where each combo is a
+  line starting with its code, then `Points: 3500`, then `Successfully
+  claim the bonuses: BISH, GSUE, STRU` (which may wrap onto more lines).
 
 ## Planning the route
 
