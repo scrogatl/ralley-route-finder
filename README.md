@@ -953,6 +953,11 @@ any user name works, with the password from `.env`.
   other scenario's page has a **Delete this scenario** link, which removes it
   and its files (its GPX and any Google checks). A stopped scenario can be
   run again by submitting the same settings.
+- **Favorites and sorting:** click the star beside a scenario, in the list
+  or on its page, to mark it a favorite; click again to unmark it. Favorites
+  are saved with the scenario, so everyone using the site sees them. Sort the
+  list by the star column to bring favorites to the top. The list keeps the
+  last sort you chose, in that browser, between visits.
 
 ### Checking routes with Google
 

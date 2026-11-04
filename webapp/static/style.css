@@ -112,6 +112,17 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-sp
 td.when { white-space: nowrap; }
 /* Long lists of bonus codes break between codes rather than widening the table */
 td.settings { min-width: 16em; overflow-wrap: anywhere; }
+/* Favorite star: orange when on, from the blue and orange palette */
+.favorite-form { display: inline; }
+button.star {
+  background: none; border: none; padding: 0 4px; font-size: 20px; line-height: 1; font-weight: 400;
+  color: var(--muted); cursor: pointer;
+}
+button.star.on { color: #e07b00; }
+button.star:hover { color: #e07b00; }
+h1 button.star { font-size: 24px; vertical-align: -1px; padding-left: 0; }
+td.fav, th.fav { width: 2em; text-align: center; padding-left: 4px; padding-right: 4px; }
+tr.favorite td { background: color-mix(in srgb, #e07b00 7%, transparent); }
 table.route td:last-child { color: var(--muted); font-size: 13px; }
 .summary { margin-top: 12px; font-variant-numeric: tabular-nums; }
 .summary p { margin: 3px 0; }

@@ -164,10 +164,12 @@ check_lock = threading.Lock()
 
 
 def save_worker_copy(run):
-    """Save the worker's copy of a run, keeping any name given to it since
-    the worker loaded it."""
+    """Save the worker's copy of a run, keeping any name or favorite given
+    to it since the worker loaded it."""
     with save_lock:
-        run['name'] = load_run(run['id']).get('name', '')
+        saved = load_run(run['id'])
+        run['name'] = saved.get('name', '')
+        run['favorite'] = saved.get('favorite', False)
         save_run(run)
 
 
@@ -679,6 +681,18 @@ def rename_run(run_id):
         run = load_run(run_id)
         run['name'] = request.form.get('name', '').strip()[:60]
         save_run(run)
+    return redirect(url_for('show_run', run_id=run_id))
+
+
+@app.post('/run/<run_id>/favorite')
+def favorite_run(run_id):
+    with save_lock:
+        run = load_run(run_id)
+        run['favorite'] = not run.get('favorite', False)
+        save_run(run)
+    # Back to the list or the scenario page, wherever the star was clicked
+    if request.form.get('back') == 'index':
+        return redirect(url_for('index'))
     return redirect(url_for('show_run', run_id=run_id))
 
 

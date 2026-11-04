@@ -1,0 +1,6 @@
+{# A star that marks or unmarks the run as a favorite; back says where to return #}
+<form method="post" action="{{ url_for('favorite_run', run_id=run.id) }}" class="favorite-form">
+  <input type="hidden" name="back" value="{{ back }}">
+  <button type="submit" class="star{% if run.favorite %} on{% endif %}" aria-pressed="{{ 'true' if run.favorite else 'false' }}"
+          title="{{ 'Remove from favorites' if run.favorite else 'Add to favorites' }}">{{ '★' if run.favorite else '☆' }}</button>
+</form>
