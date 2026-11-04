@@ -154,3 +154,25 @@ summary { cursor: pointer; color: var(--muted); font-size: 13px; }
   font: 700 11px/18px system-ui, sans-serif; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,.4);
 }
 .stop.hq { background: #e07b00; color: #fff; border-radius: 6px; }
+/* Multi-select dropdown (slow zones) */
+details.multi { position: relative; margin-bottom: 4px; }
+details.multi summary {
+  list-style: none; cursor: pointer; padding: 7px 28px 7px 9px; border: 1px solid var(--line);
+  border-radius: 6px; background: var(--bg); color: var(--text); position: relative;
+}
+details.multi summary::-webkit-details-marker { display: none; }
+details.multi summary::after { content: '▾'; position: absolute; right: 10px; color: var(--muted); }
+details.multi[open] summary { outline: 2px solid var(--accent); }
+.multi-menu {
+  position: absolute; z-index: 10; left: 0; right: 0; margin-top: 4px; padding: 10px;
+  display: flex; flex-direction: column; gap: 8px;
+  background: var(--card); border: 1px solid var(--line); border-radius: 6px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .15);
+}
+.multi-menu .select-all { padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+/* Scenarios list heading, with Archive all and Archives */
+.runs-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.runs-tools { display: flex; gap: 14px; align-items: baseline; font-size: 13px; }
+.runs-tools form { margin: 0; }
+table.archives { width: auto; }
+.must-only { margin-top: 6px; }

@@ -312,9 +312,11 @@ PyPy.
 | `--road-factor` | 1.23 | Multiplies straight-line miles to approximate road miles (Google checks of 2026 routes gave 1.20-1.23) |
 | `--gas-miles` | 175 | Stop for gas each time the route passes another this many miles; 0 for none |
 | `--gas-minutes` | 10 | Time for each gas stop |
-| `--slow-zone` | Atlanta | `LAT,LON,RADIUS_MILES,MPH`: the part of any leg inside this circle goes at MPH. Repeat for more zones; the default is `33.78,-84.39,15,25` |
+| `--slow-zone` | Atlanta | `LAT,LON,RADIUS_MILES,MPH[,STOP_MINUTES]`: the part of any leg inside this circle goes at MPH, and each bonus inside it takes STOP_MINUTES more. Repeat for more zones; the default is `33.78,-84.39,15,25,0` |
 | `--no-slow-zone` | | Turn off the default Atlanta slow zone |
-| `--athens-slow-zone` | off | Add a slow zone for downtown Athens and UGA, `33.951,-83.376,3,20` (see below) |
+| `--athens-slow-zone` | off | Add a slow zone for downtown Athens and UGA, `33.951,-83.376,3,20,5` (see below) |
+| `--savannah-slow-zone` | off | Add a slow zone for downtown Savannah, `32.081,-81.091,5,20,5` |
+| `--augusta-slow-zone` | off | Add a slow zone for downtown Augusta, `33.474,-82.011,3,20,5` |
 | `--max-drop` | 6 | Longest run of stops the search tries removing at once; higher is slower |
 | `--front-load` | 0 | Favor collecting points early, in case the day is cut short (see below) |
 | `--first` | none | Start with these bonuses, in this order, e.g. `CGSH,SMCH` (see below) |
@@ -325,9 +327,6 @@ PyPy.
 | `--window-margin` | 10 | Reach a bonus with hours at least this many minutes before it closes |
 | `--ignore-hours` | | Plan as if every bonus is open all day |
 | `--skip-timed` | | Leave out every bonus with opening hours |
-| `--avoid-savannah` | | Leave out the bonuses within 10 miles of downtown Savannah (SCAD, GHIS, WBHH, ASCC in 2026) |
-| `--avoid-augusta` | | Leave out the bonuses within 8 miles of downtown Augusta (AORC, AUGA, MEDC in 2026) |
-| `--avoid` | | `LAT,LON,RADIUS_MILES`: leave out every bonus inside this circle; repeat for more |
 | `--combos` | bonus-combos.csv | Combo bonuses from the rally book, used if the file exists |
 | `--ignore-combos` | | Plan without the combo bonuses |
 | `--workers` | all cores | How many CPU cores to search with |
@@ -525,25 +524,53 @@ ones (day ±10%, 1 stop in 7) at 8⅝. Either way, 8½–8¾ hours.
 ### Slow zones
 
 A slow zone is a circle where the planner drives at a lower speed: the part
-of any leg inside it goes at the zone's MPH. The Atlanta zone is on by
-default. It matters even though routes get checked with Google: the check
+of any leg inside it goes at the zone's MPH. A zone can also add minutes to
+each stop inside it, for parking and walking to the bonus. The Atlanta zone
+is on by default on the command line (`--no-slow-zone` turns it off). The
+web app picks slow zones from a Slow zones dropdown, with a Select all
+option, and starts with none picked, so pick Atlanta there for the same
+plan.
+
+| Zone | Option | Circle | Speed | Extra a stop | Where the numbers come from |
+|---|---|---|---|---|---|
+| Atlanta | on by default | 15 mi: I-285 plus about 5 | 25 MPH | 0 | Google checks: legs near Atlanta averaged 28 straight-line MPH against 39 elsewhere |
+| Athens | `--athens-slow-zone` | 3 mi: OCLG, UGCB, UGAA | 20 MPH | 5 min | Speed fitted to Google's leg times (below); parking a guess |
+| Savannah | `--savannah-slow-zone` | 5 mi: SCAD, GHIS, WBHH | 20 MPH | 5 min | Guesses, like Athens's speed before it was fitted |
+| Augusta | `--augusta-slow-zone` | 3 mi: AORC, AUGA, MEDC | 20 MPH | 5 min | Guesses |
+
+Parking is the same 5 minutes in every downtown zone, on top of the usual
+stop time, for finding a spot or walking to the bonus. It's a guess:
+Google's times are driving only, so nothing has measured it. Atlanta's zone
+adds none, since its circle is mostly suburbs and highway and is there for
+the traffic.
+
+The Atlanta zone matters even though routes get checked with Google: the check
 reports real road times whatever the zone, but the zone decides which route
 gets planned. On the saved Google checks, legs near Atlanta averaged about
 28 straight-line miles an hour against 39 elsewhere, so without the zone the
 planner would happily route through Atlanta and Google would then say it's
 over time.
 
-`--avoid-savannah` and `--avoid-augusta` (the web app's "Avoid Savannah" and
-"Avoid Augusta" switches) leave out each city's own bonuses, for a day that
-stays out of its traffic and parking. Each circle takes in the city's
-cluster and stops short of the next bonus out: Savannah's four are within
-8 miles of downtown and the next is 24 out; Augusta's three are within 3 miles
-and the next, HEPH, is 13 out. A route can still drive through the city;
-only its bonuses are left out. For another place, or a bigger circle, use
-`--avoid LAT,LON,RADIUS_MILES`, or change `SAVANNAH_AVOID` and
-`AUGUSTA_AVOID` at the top of `planRoute.py`.
+**Slow zones instead of avoiding a city.** There used to be avoid options
+that left out Savannah's and Augusta's bonuses. Slow zones replaced them
+because they charge for what makes a city costly, traffic and parking, and
+let the planner decide: a small downtown bonus stops being worth the
+time, while a big one can still earn it. The cost also applies to a
+route that drives straight through, which leaving out bonuses never did.
+The parking minutes are added to each leg into a bonus in the zone, so
+they count once a stop, before the photo. A bonus within a quarter mile
+(straight line) of the stop before is a short walk from where you parked,
+so it doesn't pay parking again: Athens's OCLG, UGCB and UGAA, 0.06 to 0.14
+miles apart, pay it once between them. Each circle stays clear of the interstates
+around the city (I-95 and I-16 at Savannah, I-20 at Augusta) so traffic
+going past isn't slowed, which is why ASCC, 8 miles out, isn't in
+Savannah's zone. To be sure the planner stays out of a city, give its zone
+a big stop time, e.g. `--slow-zone 32.081,-81.091,5,20,30`. The zones are
+`ATLANTA_SLOW_ZONE` and the others at the top of `planRoute.py`. The
+Google check uses Google's own leg times and the usual stop time, so it
+doesn't add a zone's parking minutes.
 
-`--athens-slow-zone` (the web app's "Athens slow zone" switch) adds 3 miles
+`--athens-slow-zone` (Athens in the web app's Slow zones dropdown) adds 3 miles
 around downtown Athens and UGA at 20 MPH. It's off by default because the
 gain is small. Fitted against Google's times on the 73 different legs in
 the saved checks (scenario H settings), it cut the total error between the
@@ -1158,6 +1185,16 @@ any user name works, with the password from `.env`.
   are saved with the scenario, so everyone using the site sees them. Sort the
   list by the star column to bring favorites to the top. The list keeps the
   last sort you chose, in that browser, between visits.
+- **Archive and restore:** **Archive all**, above the list, moves every
+  finished, stopped or failed scenario into an archive, out of the list, for
+  a fresh start, e.g. after a change to the planner. Waiting and running
+  scenarios stay. The **Archives** page lists each archive by when it was
+  made, with how many scenarios and the best points, and **Restore** puts
+  its scenarios back with their names, stars and Google checks. Since the
+  same settings on the same data always make the same scenario, one planned
+  again after archiving is already in the list; restoring keeps the list's
+  copy and leaves the archived one where it is. Archives are folders in
+  `archives/` in the results folder, so a backup of the volume has them.
 
 ### Checking routes with Google
 

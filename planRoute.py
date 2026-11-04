@@ -35,18 +35,24 @@ from datetime import datetime
 EARTH_RADIUS_MILES = 3958.8
 GPX_NS = "http://www.topografix.com/GPX/1/1"
 
+# Slow zones: the part of any leg inside the circle goes at mph, and each
+# bonus inside it takes stop_minutes more than the usual stop, for parking
+# and walking. Change them with --slow-zone.
 # Atlanta traffic: centered in the I-285 loop, radius covers I-285 (about
-# 10 miles out) plus about 5 more; speed is a guess, change it with --slow-zone
-ATLANTA_SLOW_ZONE = dict(lat=33.78, lon=-84.39, radius=15, mph=25)
-# Downtown Athens and UGA (--athens-slow-zone), fitted to Google's times on
-# 2026 legs: its short in-town hops took about twice the open-road time
-ATHENS_SLOW_ZONE = dict(lat=33.951, lon=-83.376, radius=3, mph=20)
-# Cities to leave out (--avoid-savannah, --avoid-augusta): every bonus within
-# the radius of downtown. Each radius takes in the city's own cluster of
-# bonuses (2026: Savannah's 4 within 8 miles, the next 24 out; Augusta's 3
-# within 3 miles, the next 13 out)
-SAVANNAH_AVOID = dict(lat=32.081, lon=-81.091, radius=10)
-AUGUSTA_AVOID = dict(lat=33.474, lon=-82.011, radius=8)
+# 10 miles out) plus about 5 more; speed is a guess
+ATLANTA_SLOW_ZONE = dict(lat=33.78, lon=-84.39, radius=15, mph=25, stop_minutes=0)
+# The downtown zones all take the same 5 minutes more a stop for parking, a
+# guess: Google's times don't include parking. Atlanta's takes none, as its
+# circle is mostly suburbs and highway, there for the traffic.
+# Downtown Athens and UGA (--athens-slow-zone), speed fitted to Google's times
+# on 2026 legs: its short in-town hops took about twice the open-road time
+ATHENS_SLOW_ZONE = dict(lat=33.951, lon=-83.376, radius=3, mph=20, stop_minutes=5)
+# Downtown Savannah (--savannah-slow-zone) and Augusta (--augusta-slow-zone):
+# speed is a guess, like Athens's until it was checked against Google. Each circle takes in the city's in-town bonuses (2026: Savannah's
+# SCAD, GHIS and WBHH within 4.4 miles, ASCC 8 out is left on open road;
+# Augusta's three within 2.8 miles) and stays clear of I-95, I-16 and I-20
+SAVANNAH_SLOW_ZONE = dict(lat=32.081, lon=-81.091, radius=5, mph=20, stop_minutes=5)
+AUGUSTA_SLOW_ZONE = dict(lat=33.474, lon=-82.011, radius=3, mph=20, stop_minutes=5)
 
 # Each starting route trades points against extra time differently; the
 # search improves every one and keeps the best
@@ -97,6 +103,9 @@ BUDGET_STEP = 0.25
 BUDGET_PATIENCE = 3
 # Bonuses this close together (in miles) are one stop's walk apart: no leg time
 SAME_PLACE_MILES = 0.05
+# A slow zone's bonus within this many straight-line miles of the last stop
+# is a short walk from where you parked, so it takes no more parking time
+WALK_MILES = 0.25
 # Reach a bonus with hours at least this many minutes before it closes
 # (--window-margin), so a slower leg doesn't miss it
 WINDOW_MARGIN = 10
@@ -136,48 +145,33 @@ def haversine_miles(a, b):
 
 
 def parse_slow_zone(text):
-    """'LAT,LON,RADIUS_MILES,MPH' -> dict, for argparse."""
+    """'LAT,LON,RADIUS_MILES,MPH[,STOP_MINUTES]' -> dict, for argparse."""
     try:
-        lat, lon, radius, mph = (float(v) for v in text.split(','))
+        values = [float(v) for v in text.split(',')]
+        if len(values) not in (4, 5):
+            raise ValueError
     except ValueError:
-        raise argparse.ArgumentTypeError(f"expected LAT,LON,RADIUS_MILES,MPH, got '{text}'")
-    return dict(lat=lat, lon=lon, radius=radius, mph=mph)
+        raise argparse.ArgumentTypeError(f"expected LAT,LON,RADIUS_MILES,MPH[,STOP_MINUTES], got '{text}'")
+    return dict(zip(('lat', 'lon', 'radius', 'mph', 'stop_minutes'), values + [0]))
+
+
+def zone_text(zone):
+    return ','.join(f'{v:g}' for v in zone.values())
 
 
 def add_slow_zone_args(parser):
-    parser.add_argument('--slow-zone', type=parse_slow_zone, action='append', metavar='LAT,LON,RADIUS_MILES,MPH',
-                        help='the part of any leg inside this circle is driven at MPH; repeat for more zones '
-                             '(default: Atlanta, I-285 plus about 5 miles: '
-                             f"{','.join(f'{v:g}' for v in ATLANTA_SLOW_ZONE.values())})")
+    parser.add_argument('--slow-zone', type=parse_slow_zone, action='append',
+                        metavar='LAT,LON,RADIUS_MILES,MPH[,STOP_MINUTES]',
+                        help='the part of any leg inside this circle is driven at MPH, and each bonus inside it '
+                             'takes STOP_MINUTES more (default 0); repeat for more zones '
+                             f'(default: Atlanta, I-285 plus about 5 miles: {zone_text(ATLANTA_SLOW_ZONE)})')
     parser.add_argument('--no-slow-zone', action='store_true', help='turn off the default Atlanta slow zone')
     parser.add_argument('--athens-slow-zone', action='store_true',
-                        help='add a slow zone for downtown Athens: '
-                             f"{','.join(f'{v:g}' for v in ATHENS_SLOW_ZONE.values())}")
-
-
-def parse_avoid(text):
-    """'LAT,LON,RADIUS_MILES' -> dict, for argparse."""
-    try:
-        lat, lon, radius = (float(v) for v in text.split(','))
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"expected LAT,LON,RADIUS_MILES, got '{text}'")
-    return dict(lat=lat, lon=lon, radius=radius)
-
-
-def add_avoid_args(parser):
-    parser.add_argument('--avoid', type=parse_avoid, action='append', default=[], metavar='LAT,LON,RADIUS_MILES',
-                        help='leave out every bonus inside this circle; repeat for more')
-    parser.add_argument('--avoid-savannah', action='store_true',
-                        help='leave out the bonuses in Savannah: '
-                             f"{','.join(f'{v:g}' for v in SAVANNAH_AVOID.values())}")
-    parser.add_argument('--avoid-augusta', action='store_true',
-                        help='leave out the bonuses in Augusta: '
-                             f"{','.join(f'{v:g}' for v in AUGUSTA_AVOID.values())}")
-
-
-def avoid_zones(args):
-    return (list(args.avoid) + ([SAVANNAH_AVOID] if args.avoid_savannah else [])
-            + ([AUGUSTA_AVOID] if args.avoid_augusta else []))
+                        help=f'add a slow zone for downtown Athens: {zone_text(ATHENS_SLOW_ZONE)}')
+    parser.add_argument('--savannah-slow-zone', action='store_true',
+                        help=f'add a slow zone for downtown Savannah: {zone_text(SAVANNAH_SLOW_ZONE)}')
+    parser.add_argument('--augusta-slow-zone', action='store_true',
+                        help=f'add a slow zone for downtown Augusta: {zone_text(AUGUSTA_SLOW_ZONE)}')
 
 
 def add_gas_args(parser):
@@ -194,7 +188,9 @@ def describe_gas(args):
 
 def slow_zones_from_args(args):
     zones = [] if args.no_slow_zone else args.slow_zone or [ATLANTA_SLOW_ZONE]
-    return zones + ([ATHENS_SLOW_ZONE] if args.athens_slow_zone else [])
+    return (zones + ([ATHENS_SLOW_ZONE] if args.athens_slow_zone else [])
+            + ([SAVANNAH_SLOW_ZONE] if args.savannah_slow_zone else [])
+            + ([AUGUSTA_SLOW_ZONE] if args.augusta_slow_zone else []))
 
 
 def add_first_args(parser):
@@ -357,18 +353,11 @@ def add_hours_args(parser):
 
 
 def planned_bonuses(bonuses, args):
-    """The bonuses, less those inside an avoided area and, with --skip-timed,
-    those with opening hours."""
-    zones = avoid_zones(args)
-    avoided = [b['code'] for b in bonuses if any(haversine_miles(zone, b) <= zone['radius'] for zone in zones)]
-    if avoided:
-        print(f"Leaving out {len(avoided)} bonuses in avoided areas: {', '.join(avoided)}", file=sys.stderr)
-    timed = [b['code'] for b in bonuses if args.skip_timed and (b.get('opens') or b.get('closes'))
-             and b['code'] not in avoided]
+    """The bonuses, less, with --skip-timed, those with opening hours."""
+    timed = [b['code'] for b in bonuses if args.skip_timed and (b.get('opens') or b.get('closes'))]
     if timed:
         print(f"Leaving out {len(timed)} bonuses with hours: {', '.join(timed)}", file=sys.stderr)
-    left_out = set(avoided) | set(timed)
-    return [b for b in bonuses if b['code'] not in left_out]
+    return [b for b in bonuses if b['code'] not in timed]
 
 
 def describe_hours(planner):
@@ -392,8 +381,9 @@ def describe_first(planner):
 def describe_slow_zones(zones):
     if not zones:
         return "no slow zones"
-    return ", ".join(f"{z['radius']:g} mi slow zone at {z['mph']:g} MPH around {z['lat']:g},{z['lon']:g}"
-                     for z in zones)
+    return ", ".join(f"{z['radius']:g} mi slow zone at {z['mph']:g} MPH"
+                     + (f" +{z['stop_minutes']:g} min a stop" if z.get('stop_minutes') else '')
+                     + f" around {z['lat']:g},{z['lon']:g}" for z in zones)
 
 
 def fraction_inside(a, b, zone):
@@ -440,8 +430,15 @@ class Planner:
                        for j in range(n)] for i in range(n)]
         self.leg_minutes = leg_minutes
         self.window_margin = window_margin
+        # A slow zone's extra stop time (parking) goes on each leg into one
+        # of its bonuses, so it counts once a stop, before the photo; a
+        # bonus within WALK_MILES of the last stop shares its parking
+        parking = [0] + [sum(zone.get('stop_minutes', 0) for zone in slow_zones
+                             if haversine_miles(zone, place) <= zone['radius']) / 60
+                         for place in bonuses]
         self.hours = [[self.leg_hours(self.places[i], self.places[j], self.miles[i][j], speed, slow_zones)
                        + (leg_minutes / 60 if self.miles[i][j] > SAME_PLACE_MILES * road_factor else 0)
+                       + (parking[j] if self.miles[i][j] > WALK_MILES * road_factor else 0)
                        for j in range(n)] for i in range(n)]
         # Cached for insert_greedily's inner loop: hours_to[j][i] is hours[i][j]
         self.hours_to = [list(column) for column in zip(*self.hours)]
@@ -1319,7 +1316,6 @@ def main():
     add_gas_args(parser)
     add_first_args(parser)
     add_hours_args(parser)
-    add_avoid_args(parser)
     add_combo_args(parser)
     parser.add_argument('--best-budget', action='store_true',
                         help='try time budgets from the --deadline down, planning each in quick mode, and keep the '

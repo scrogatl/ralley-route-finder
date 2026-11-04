@@ -430,7 +430,6 @@ def main():
     planRoute.add_gas_args(parser)
     planRoute.add_first_args(parser)
     planRoute.add_hours_args(parser)
-    planRoute.add_avoid_args(parser)
     planRoute.add_combo_args(parser)
     args = parser.parse_args()
 

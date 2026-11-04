@@ -27,7 +27,7 @@ Environment:
 
     APP_PASSWORD=secret flask --app webapp/app.py run    # to try it locally
 """
-import argparse, glob, hashlib, hmac, json, math, os, queue, sys, threading, time
+import argparse, glob, hashlib, hmac, json, math, os, queue, re, shutil, sys, threading, time
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -51,6 +51,8 @@ DATA_DIR = os.environ.get('DATA_DIR') or os.path.join(os.path.dirname(os.path.ab
 RESULTS_DIR = os.environ.get('RESULTS_DIR') or os.path.join(DATA_DIR, 'web-scenarios')
 BONUS_CSV = os.path.join(DATA_DIR, 'bonus-lat-lon-points.csv')
 COMBOS_CSV = os.path.join(DATA_DIR, 'bonus-combos.csv')
+# Archived runs, a folder for each time the list was archived, named for when
+ARCHIVE_DIR = os.path.join(RESULTS_DIR, 'archives')
 WORKERS = int(os.environ.get('PLANNER_WORKERS') or os.cpu_count())
 GOOGLE_CHECK = os.environ.get('GOOGLE_CHECK', '').lower() in ('on', '1', 'true', 'yes')
 GMAPS_API_KEY = os.environ.get('GMAPS_API_KEY', '')
@@ -82,12 +84,19 @@ NUMBERS = [
     ('gas_miles', 'Gas stop every, miles', 175, 0, 500, '0 for no gas stops'),
     ('gas_minutes', 'Minutes per gas stop', 10, 0, 60, ''),
 ]
+# Slow zones, picked in one dropdown, all off by default: (setting, label,
+# default, help, zone). The setting names stay as they were so saved runs
+# keep their IDs.
+SLOW_ZONES = [
+    ('slow_zone', 'Atlanta', False, 'inside I-285 plus about 5 miles at 25 MPH', planRoute.ATLANTA_SLOW_ZONE),
+    ('athens_zone', 'Athens', False, 'about 3 miles around downtown Athens and UGA at 20 MPH, 5 more minutes a stop for parking',
+     planRoute.ATHENS_SLOW_ZONE),
+    ('savannah_zone', 'Savannah', False, '5 miles around downtown at 20 MPH, 5 more minutes a stop for parking',
+     planRoute.SAVANNAH_SLOW_ZONE),
+    ('augusta_zone', 'Augusta', False, '3 miles around downtown at 20 MPH, 5 more minutes a stop for parking',
+     planRoute.AUGUSTA_SLOW_ZONE),
+]
 SWITCHES = [
-    ('slow_zone', 'Atlanta slow zone', True, 'inside I-285 plus about 5 miles at 25 MPH'),
-    ('athens_zone', 'Athens slow zone', False, 'about 3 miles around downtown Athens and UGA at 20 MPH'),
-    ('avoid_savannah', 'Avoid Savannah', False, 'leave out the bonuses within 10 miles of downtown'),
-    ('avoid_augusta', 'Avoid Augusta', False, 'leave out the bonuses within 8 miles of downtown'),
-    ('use_hours', 'Bonus hours', True, "only count bonuses reached while they're open"),
     ('skip_timed', 'Leave out bonuses with hours', False, 'plan only the bonuses open all day'),
     ('use_combos', 'Combo bonuses', True, 'add combo points for getting every bonus in one'),
     ('best_budget', 'Find the best time budget', False,
@@ -97,11 +106,15 @@ SWITCHES = [
     ('quick', 'Quick mode', False, 'beam search: about 4x faster and as good on the 2026 bonuses, but it may '
                                    'miss a better route; no front-load'),
 ]
-# How the list of runs describes a switch that's off (the Athens zone, the
-# avoided cities, leaving out timed bonuses, only and quick, off by default,
+# How the list of runs describes a switch that's off (the slow zones,
+# leaving out timed bonuses, only and quick, off by default,
 # are described when on)
-SWITCHED_OFF = {'slow_zone': 'no Atlanta slow zone', 'use_hours': 'bonus hours ignored', 'use_combos': 'no combos'}
-DEFAULTS = {name: default for name, _, default, *_ in NUMBERS} | {name: on for name, _, on, _ in SWITCHES} | {
+SWITCHED_OFF = {'use_hours': 'bonus hours ignored', 'use_combos': 'no combos'}
+# Bonus hours are always kept to (Leave out bonuses with hours is the way not
+# to plan around them); use_hours stays a setting so saved runs keep their
+# IDs, and runs from before, with it off, still show "bonus hours ignored"
+DEFAULTS = {name: default for name, _, default, *_ in NUMBERS} | {name: on for name, _, on, *_ in SWITCHES + SLOW_ZONES} | {
+    'use_hours': True,
     'must': '', 'start': planRoute.RALLY_START,
     'late_penalty': ','.join(f'{m:g}:{p:g}' for m, p in planRoute.LATE_PENALTY)}
 
@@ -216,8 +229,9 @@ def read_form(form):
         if not low <= value <= high:
             raise ValueError(f"{label}: must be from {low:g} to {high:g}")
         settings[name] = value
-    for name, *_ in SWITCHES:
+    for name, *_ in SWITCHES + SLOW_ZONES:
         settings[name] = form.get(name) == 'on'
+    settings['use_hours'] = True
     try:
         settings['start'] = planRoute.start_time(form.get('start', '').strip())
     except argparse.ArgumentTypeError as error:
@@ -272,8 +286,11 @@ def describe(settings):
               and not (name == 'use_hours' and settings.get('skip_timed'))]
     if settings.get('skip_timed'):
         parts.append('bonuses with hours left out')
-    if settings.get('athens_zone'):
-        parts.append('Athens slow zone')
+    zones = [label for name, label, *_ in SLOW_ZONES if settings.get(name)]
+    if zones:
+        names = zones[0] if len(zones) == 1 else ', '.join(zones[:-1]) + ' and ' + zones[-1]
+        parts.append(f"{names} slow zone{'s' if len(zones) > 1 else ''}")
+    # Runs from before the avoid options became slow zones
     if settings.get('avoid_savannah'):
         parts.append('avoid Savannah')
     if settings.get('avoid_augusta'):
@@ -288,9 +305,7 @@ def describe(settings):
 def planner_args(settings):
     """The command-line arguments planRoute's helpers read, from a run's settings."""
     return argparse.Namespace(first=settings.get('first'), must=settings.get('must'), only=settings.get('only'),
-                              skip_timed=settings.get('skip_timed', False), avoid=[],
-                              avoid_savannah=settings.get('avoid_savannah', False),
-                              avoid_augusta=settings.get('avoid_augusta', False),
+                              skip_timed=settings.get('skip_timed', False),
                               gas_miles=settings['gas_miles'], gas_minutes=settings['gas_minutes'],
                               combos=COMBOS_CSV, ignore_combos=not settings['use_combos'])
 
@@ -301,8 +316,7 @@ def make_planner(settings, args):
     e.g. an unknown must-visit code."""
     hq, bonuses = planRoute.load_bonuses(BONUS_CSV)
     bonuses = planRoute.planned_bonuses(bonuses, args)
-    slow_zones = (([planRoute.ATLANTA_SLOW_ZONE] if settings['slow_zone'] else [])
-                  + ([planRoute.ATHENS_SLOW_ZONE] if settings.get('athens_zone') else []))
+    slow_zones = [zone for name, *_, zone in SLOW_ZONES if settings.get(name)]
     planner = planRoute.Planner(hq, bonuses, settings['hours'], settings['speed'], settings['stop_minutes'],
                                 settings['road_factor'], settings['front_load'], slow_zones,
                                 settings['gas_miles'], settings['gas_minutes'], settings['start'],
@@ -494,8 +508,8 @@ def index():
         settings = DEFAULTS | load_run(request.args['from'])['settings']
     runs = [add_confidence(run['id']) if needs_confidence(run) else run
             for run in all_runs()]
-    return render_template('index.html', numbers=NUMBERS, switches=SWITCHES, settings=settings,
-                           runs=runs, describe=describe, error=None,
+    return render_template('index.html', numbers=NUMBERS, switches=SWITCHES, slow_zones=SLOW_ZONES, settings=settings,
+                           runs=runs, describe=describe, error=None, archive_count=len(os.listdir(ARCHIVE_DIR)) if os.path.isdir(ARCHIVE_DIR) else 0,
                            has_data=os.path.exists(BONUS_CSV))
 
 
@@ -504,9 +518,9 @@ def start_run():
     try:
         settings = read_form(request.form)
     except ValueError as error:
-        return render_template('index.html', numbers=NUMBERS, switches=SWITCHES,
+        return render_template('index.html', numbers=NUMBERS, switches=SWITCHES, slow_zones=SLOW_ZONES,
                                settings=DEFAULTS | request.form.to_dict()
-                               | {name: request.form.get(name) == 'on' for name, *_ in SWITCHES},
+                               | {name: request.form.get(name) == 'on' for name, *_ in SWITCHES + SLOW_ZONES},
                                runs=all_runs(), describe=describe,
                                error=str(error), has_data=os.path.exists(BONUS_CSV)), 400
     if not os.path.exists(BONUS_CSV):
@@ -768,6 +782,80 @@ def delete_run(run_id):
         for path in glob.glob(glob.escape(result_path(run_id, '')) + '*'):
             os.remove(path)
     return redirect(url_for('index'))
+
+
+def archive_path(name):
+    if not re.fullmatch(r'\d{4}-\d{2}-\d{2}-\d{6}', name):
+        abort(404)
+    return os.path.join(ARCHIVE_DIR, name)
+
+
+def run_files(folder, run_id):
+    """A run's files in folder: its JSON, its GPX and any Google checks' GPX."""
+    return glob.glob(os.path.join(glob.escape(folder), glob.escape(run_id) + '.*'))
+
+
+def all_archives():
+    """Each archive's name and summary, newest first."""
+    archives = []
+    if os.path.isdir(ARCHIVE_DIR):
+        for name in sorted(os.listdir(ARCHIVE_DIR), reverse=True):
+            folder = os.path.join(ARCHIVE_DIR, name)
+            runs = []
+            for path in glob.glob(os.path.join(glob.escape(folder), '*.json')):
+                with open(path) as f:
+                    runs.append(json.load(f))
+            done = [run for run in runs if run['status'] == 'done']
+            archives.append(dict(name=name, runs=len(runs), favorites=sum(1 for run in runs if run.get('favorite')),
+                                 best=max((run['points'] for run in done), default=None),
+                                 archived=datetime.strptime(name, '%Y-%m-%d-%H%M%S')
+                                 .replace(tzinfo=timezone.utc).isoformat(timespec='seconds'),
+                                 present=sum(1 for run in runs if os.path.exists(result_path(run['id'])))))
+    return archives
+
+
+@app.post('/archive')
+def archive_runs():
+    """Move every run that isn't waiting or running into a new archive."""
+    with save_lock:
+        runs = [run for run in all_runs() if run['status'] not in ('queued', 'running')]
+        if runs:
+            name = datetime.now(timezone.utc).strftime('%Y-%m-%d-%H%M%S')
+            folder = os.path.join(ARCHIVE_DIR, name)
+            os.makedirs(folder, exist_ok=True)
+            for run in runs:
+                for path in run_files(RESULTS_DIR, run['id']):
+                    shutil.move(path, folder)
+    return redirect(url_for('index'))
+
+
+@app.get('/archives')
+def show_archives():
+    return render_template('archives.html', archives=all_archives(),
+                           restored=request.args.get('restored'), skipped=request.args.get('skipped'))
+
+
+@app.post('/archives/<name>/restore')
+def restore_archive(name):
+    """Move an archive's runs back into the list. A run whose settings were
+    planned again since it was archived, so it's in the list already, stays
+    in the archive and the list's copy is kept."""
+    folder = archive_path(name)
+    if not os.path.isdir(folder):
+        abort(404)
+    restored = skipped = 0
+    with save_lock:
+        for path in glob.glob(os.path.join(glob.escape(folder), '*.json')):
+            run_id = os.path.basename(path)[:-len('.json')]
+            if os.path.exists(result_path(run_id)):
+                skipped += 1
+                continue
+            for file in run_files(folder, run_id):
+                shutil.move(file, RESULTS_DIR)
+            restored += 1
+        if not os.listdir(folder):
+            os.rmdir(folder)
+    return redirect(url_for('show_archives', restored=restored, skipped=skipped))
 
 
 @app.post('/run/<run_id>/name')

@@ -32,14 +32,41 @@
           <input name="late_penalty" value="{{ settings['late_penalty'] }}" placeholder="15:25,30:50">
           <small>minutes late:percent off, e.g. 15:25,30:50 (2026 rally book); later is a DNF</small>
         </label>
-        <label class="field">
-          <span>Must visit</span>
-          <input name="must" value="{{ settings['must'] }}" placeholder="e.g. CGSH,SMCH">
-          <small>bonus codes to include, in whatever order fits best</small>
-        </label>
+        <div class="field">
+          <label class="field" for="must">
+            <span>Must visit</span>
+            <input id="must" name="must" value="{{ settings['must'] }}" placeholder="e.g. CGSH,SMCH">
+            <small>bonus codes to include, in whatever order fits best</small>
+          </label>
+          {% for name, label, on, help in switches if name == 'only' %}
+            <label class="switch must-only">
+              <input type="checkbox" name="{{ name }}" {% if settings[name] in (true, 'on') %}checked{% endif %}>
+              <span><strong>{{ label }}</strong> <small>{{ help }}</small></span>
+            </label>
+          {% endfor %}
+        </div>
+      </div>
+      <div class="field">
+        <span>Slow zones</span>
+        <details class="multi" id="slow-zones">
+          <summary data-none="None">None</summary>
+          <div class="multi-menu">
+            <label class="switch select-all">
+              <input type="checkbox" data-select-all>
+              <span><strong>Select all</strong></span>
+            </label>
+            {% for name, label, on, help, zone in slow_zones %}
+              <label class="switch">
+                <input type="checkbox" name="{{ name }}" data-label="{{ label }}" {% if settings[name] in (true, 'on') %}checked{% endif %}>
+                <span><strong>{{ label }}</strong> <small>{{ help }}</small></span>
+              </label>
+            {% endfor %}
+          </div>
+        </details>
+        <small>slower driving in town, and time to park; none by default</small>
       </div>
       <div class="switches">
-        {% for name, label, on, help in switches %}
+        {% for name, label, on, help in switches if name != 'only' %}
           <label class="switch">
             <input type="checkbox" name="{{ name }}" {% if settings[name] in (true, 'on') %}checked{% endif %}>
             <span><strong>{{ label }}</strong> <small>{{ help }}</small></span>
@@ -56,7 +83,18 @@
   </section>
 
   <section class="card runs-card">
-    <h2>Scenarios run so far</h2>
+    <div class="runs-head">
+      <h2>Scenarios run so far</h2>
+      <div class="runs-tools">
+        {% if runs %}
+          <form method="post" action="{{ url_for('archive_runs') }}"
+                onsubmit="return confirm('Archive every scenario in the list? They leave the list, and Archives can bring them back.');">
+            <button type="submit" class="link">Archive all</button>
+          </form>
+        {% endif %}
+        <a href="{{ url_for('show_archives') }}">Archives{% if archive_count %} ({{ archive_count }}){% endif %}</a>
+      </div>
+    </div>
     {% if runs %}
       <div class="table-wrap">
         <table class="runs sortable" data-remember="runs">
@@ -94,4 +132,32 @@
     {% endif %}
   </section>
 </div>
+<script>
+  // Slow zones dropdown: Select all, and a summary naming what's picked
+  (function () {
+    var box = document.getElementById('slow-zones');
+    if (!box) return;
+    var all = box.querySelector('[data-select-all]');
+    var zones = Array.prototype.slice.call(box.querySelectorAll('input[name]'));
+    var summary = box.querySelector('summary');
+    function update() {
+      var picked = zones.filter(function (z) { return z.checked; });
+      all.checked = picked.length === zones.length;
+      all.indeterminate = picked.length > 0 && picked.length < zones.length;
+      summary.textContent = picked.length === 0 ? summary.dataset.none
+        : picked.length === zones.length ? 'All (' + picked.map(function (z) { return z.dataset.label; }).join(', ') + ')'
+        : picked.map(function (z) { return z.dataset.label; }).join(', ');
+    }
+    all.addEventListener('change', function () {
+      zones.forEach(function (z) { z.checked = all.checked; });
+      update();
+    });
+    zones.forEach(function (z) { z.addEventListener('change', update); });
+    // Close when clicking elsewhere on the page
+    document.addEventListener('click', function (event) {
+      if (box.open && !box.contains(event.target)) box.open = false;
+    });
+    update();
+  })();
+</script>
 {% endblock %}
