@@ -7,6 +7,8 @@
   {% endif %}
 {% endblock %}
 {% block main %}
+{# Legs shorter than this show "next door" instead of points per mile #}
+{% set next_door_miles = 1 %}
 <section class="card">
   <div class="topbar">
     <p class="back"><a href="{{ url_for('index') }}">← All scenarios</a></p>
@@ -57,8 +59,9 @@
     <div class="headline">
       <div><span>{{ run.stops }}</span>bonuses</div>
       <div><span>{{ run.miles }}</span>est. miles</div>
-      <div><span>{{ run.hours }}</span>of {{ run.settings.hours }} hours</div>
+      <div><span>{{ run.hours }}</span>of {{ '%g' % (run.budget or run.settings.hours) }} hours</div>
       {% if run.confidence is defined %}<div title="{{ run.confidence_text }}"><span>{{ run.confidence }}%</span>confidence</div>{% endif %}
+      {% if run.expected is defined %}<div title="Average score of the simulated days, after missed bonuses and the late penalty"><span>{{ '{:,}'.format(run.expected) }}</span>expected score</div>{% endif %}
       <div><span>{{ run.seconds }} s</span>to plan</div>
     </div>
     <p class="actions">
@@ -98,7 +101,7 @@
             <td class="num">{{ leg.points }}</td>
             <td class="num">{{ leg.leg_miles }}</td>
             <td class="num">{{ leg.miles }}</td>
-            <td class="num">{{ '{:,.0f}'.format(leg.points / leg.leg_miles) if leg.points and leg.leg_miles else '' }}</td>
+            <td class="num">{% if leg.points and leg.leg_miles >= next_door_miles %}{{ '{:,.0f}'.format(leg.points / leg.leg_miles) }}{% elif leg.points %}<small class="muted" title="Under {{ next_door_miles }} mile from the stop before, so points per mile means little">next door</small>{% endif %}</td>
             <td class="num" data-sort="{{ leg.leave }}">{{ leg.arrive }}</td>
             <td class="num">{{ '%.2f' % leg.leave }}</td>
             <td class="num">{{ '{:,}'.format(leg.score) }}</td>
@@ -111,6 +114,27 @@
   <div class="summary">
     {% for line in run.summary %}<p>{{ line }}</p>{% endfor %}
     {% if run.confidence_text %}<p>{{ run.confidence_text }}</p>{% endif %}
+    {% if run.budgets %}
+      <details open>
+        <summary>Time budgets tried, for a {{ '%g' % run.settings.deadline }}-hour deadline</summary>
+        <div class="table-wrap">
+          <table class="budgets">
+            <thead><tr><th class="num">Budget, h</th><th class="num">Points planned</th><th class="num">Confidence</th><th class="num">Expected score</th><th></th></tr></thead>
+            <tbody>
+              {% for row in run.budgets %}
+                <tr{% if row.best %} class="best"{% endif %}>
+                  <td class="num">{{ '%g' % row.hours }}</td>
+                  <td class="num">{{ '{:,}'.format(row.points) }}</td>
+                  <td class="num">{{ '%.0f%%' % (row.confidence * 100) }}</td>
+                  <td class="num">{{ '{:,.0f}'.format(row.expected) }}</td>
+                  <td>{% if row.best %}<strong>best</strong>{% endif %}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </details>
+    {% endif %}
   </div>
   <details>
     <summary>Planner settings</summary>
@@ -169,7 +193,7 @@
                 <td class="num">{{ row.line_miles }}</td>
                 <td class="num">{{ row.road_miles }}</td>
                 <td class="num">{{ row.miles }}</td>
-                <td class="num">{{ '{:,.0f}'.format(row.points / row.road_miles) if row.points and row.road_miles and not row.missed else '' }}</td>
+                <td class="num">{% if row.points and not row.missed and row.road_miles >= next_door_miles %}{{ '{:,.0f}'.format(row.points / row.road_miles) }}{% elif row.points and not row.missed %}<small class="muted" title="Under {{ next_door_miles }} mile from the stop before, so points per mile means little">next door</small>{% endif %}</td>
                 <td class="num">{{ row.drive }}</td>
                 <td class="num" data-sort="{{ row.leave }}">{{ row.arrive }}</td>
                 <td class="num">{{ '{:,}'.format(row.score) }}</td>

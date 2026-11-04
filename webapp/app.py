@@ -90,6 +90,9 @@ SWITCHES = [
     ('use_hours', 'Bonus hours', True, "only count bonuses reached while they're open"),
     ('skip_timed', 'Leave out bonuses with hours', False, 'plan only the bonuses open all day'),
     ('use_combos', 'Combo bonuses', True, 'add combo points for getting every bonus in one'),
+    ('best_budget', 'Find the best time budget', False,
+     'plan budgets from the deadline down and keep the one with the highest expected score under the late '
+     'penalty; the time budget above is ignored; takes a few minutes'),
     ('only', 'Only the must-visit bonuses', False, 'route just those, in the quickest order, adding nothing else'),
     ('quick', 'Quick mode', False, 'beam search: about 4x faster and as good on the 2026 bonuses, but it may '
                                    'miss a better route; no front-load'),
@@ -99,7 +102,8 @@ SWITCHES = [
 # are described when on)
 SWITCHED_OFF = {'slow_zone': 'no Atlanta slow zone', 'use_hours': 'bonus hours ignored', 'use_combos': 'no combos'}
 DEFAULTS = {name: default for name, _, default, *_ in NUMBERS} | {name: on for name, _, on, _ in SWITCHES} | {
-    'must': '', 'start': planRoute.RALLY_START}
+    'must': '', 'start': planRoute.RALLY_START,
+    'late_penalty': ','.join(f'{m:g}:{p:g}' for m, p in planRoute.LATE_PENALTY)}
 
 app = Flask(__name__)
 
@@ -218,13 +222,22 @@ def read_form(form):
         settings['start'] = planRoute.start_time(form.get('start', '').strip())
     except argparse.ArgumentTypeError as error:
         raise ValueError(f"Rally start: {error}")
+    try:
+        tiers = planRoute.parse_late_penalty(form.get('late_penalty', '').strip())
+    except argparse.ArgumentTypeError:
+        raise ValueError("Late penalty: enter minutes:percent pairs, e.g. 15:25,30:50")
+    settings['late_penalty'] = ','.join(f'{m:g}:{p:g}' for m, p in tiers)
     settings['must'] = ','.join(code.strip().upper() for code in form.get('must', '').split(',') if code.strip())
-    if settings['hours'] > settings['deadline']:
+    if settings['hours'] > settings['deadline'] and not settings['best_budget']:
         raise ValueError("Time budget: must be no more than the deadline")
     if settings['only'] and not settings['must']:
         raise ValueError("Only the must-visit bonuses: list the bonuses in Must visit")
     if settings['quick'] and settings['front_load']:
         raise ValueError("Quick mode: set Front-load to 0, since quick mode doesn't support it")
+    if settings['best_budget'] and settings['front_load']:
+        raise ValueError("Find the best time budget: set Front-load to 0, since it plans in quick mode")
+    if settings['best_budget'] and settings['only']:
+        raise ValueError("Find the best time budget: turn off Only the must-visit bonuses")
     return settings
 
 
@@ -232,13 +245,17 @@ def describe(settings):
     """A short line for the list of runs, e.g. '9.5 h, 46 MPH, 4 min stops, road x1.22'."""
     # Runs from before the deadline setting had it at the time budget
     deadline = settings.get('deadline', settings['hours'])
-    parts = [f"{settings['hours']:g} h" + (f" of {deadline:g}" if deadline > settings['hours'] else ''),
+    hours = (f"best budget for {deadline:g} h" if settings.get('best_budget')
+             else f"{settings['hours']:g} h" + (f" of {deadline:g}" if deadline > settings['hours'] else ''))
+    parts = [hours,
              f"{settings['speed']:g} MPH", f"{settings['stop_minutes']:g} min stops", f"road ×{settings['road_factor']:g}"]
     # Runs from before these settings had neither
     if settings.get('leg_minutes'):
         parts.append(f"{settings['leg_minutes']:g} min legs")
     if settings.get('window_margin') and settings['use_hours'] and not settings.get('skip_timed'):
         parts.append(f"hours margin {settings['window_margin']:g} min")
+    if settings.get('late_penalty', DEFAULTS['late_penalty']) != DEFAULTS['late_penalty']:
+        parts.append(f"late penalty {settings['late_penalty'] or 'DNF if late'}")
     if settings['front_load']:
         parts.append(f"front-load {settings['front_load']:g}")
     if settings['gas_miles'] != 175 or settings['gas_minutes'] != 10:
@@ -291,7 +308,9 @@ def make_planner(settings, args):
                                 settings['gas_miles'], settings['gas_minutes'], settings['start'],
                                 settings['use_hours'], leg_minutes=settings.get('leg_minutes', 0),
                                 window_margin=settings.get('window_margin', 0) if settings['use_hours'] else 0,
-                                deadline=settings.get('deadline', settings['hours']))
+                                deadline=settings.get('deadline', settings['hours']),
+                                late_penalty=planRoute.parse_late_penalty(
+                                    settings.get('late_penalty', DEFAULTS['late_penalty'])))
     planRoute.apply_first(planner, args)
     planRoute.apply_combos(planner, args)
     return planner, bonuses, slow_zones
@@ -309,7 +328,15 @@ def plan(run):
     started = time.monotonic()
     try:
         planner, bonuses, slow_zones = make_planner(settings, args)
-        if settings.get('quick'):
+        budgets = None
+        if settings.get('best_budget'):
+            route, budgets = planRoute.best_budget(planner, lambda p: planRouteSearch.quick_route(p, WORKERS))
+            if not settings.get('quick'):
+                # The full search may do better on the budget found
+                full = planner.solve(planRoute.START_WEIGHTS, 6, WORKERS)
+                if planRoute.simulate(planner, full)['expected'] > planRoute.simulate(planner, route)['expected']:
+                    route = full
+        elif settings.get('quick'):
             route = planRouteSearch.quick_route(planner, WORKERS)
         else:
             route = planner.solve(planRoute.START_WEIGHTS, 6, WORKERS)
@@ -328,6 +355,8 @@ def plan(run):
         save_worker_copy(run)
         raise
     finish_run(run, planner, route, bonuses, slow_zones, args, round(time.monotonic() - started))
+    if budgets:
+        run['budgets'] = budgets
     save_worker_copy(run)
 
 
@@ -335,7 +364,7 @@ def confidence(planner, route):
     """The run's confidence fields: the share of simulated days that go as
     planned, when half and 90% of them are back, and the line describing it."""
     sim = planRoute.simulate(planner, route)
-    return dict(confidence=round(sim['confidence'] * 100), confidence_text=planRoute.describe_confidence(planner, sim),
+    return dict(confidence=round(sim['confidence'] * 100), expected=round(sim['expected']), confidence_text=planRoute.describe_confidence(planner, sim),
                 back_by=dict(half=planRoute.time_of_day(planner, sim['finish_p50']),
                              most=planRoute.time_of_day(planner, sim['finish_p90']),
                              # For sorting: minutes after midnight 90% are back by
@@ -345,7 +374,7 @@ def confidence(planner, route):
 def needs_confidence(run):
     """True for a run from before confidence was simulated, or before the
     deadline was a setting of its own."""
-    return run['status'] == 'done' and ('back_by' not in run or 'deadline' not in run['settings'])
+    return run['status'] == 'done' and ('expected' not in run or 'deadline' not in run['settings'])
 
 
 def add_confidence(run_id):
@@ -377,7 +406,7 @@ def finish_run(run, planner, route, bonuses, slow_zones, args, seconds):
     run.update(status='done', seconds=seconds,
                finished=datetime.now(timezone.utc).isoformat(timespec='seconds'),
                points=legs[-1].score, stops=len(route), miles=round(legs[-1].miles),
-               hours=round(legs[-1].hours, 2),
+               hours=round(legs[-1].hours, 2), budget=planner.max_hours,
                settings_lines=[f"{len(bonuses)} bonuses, {planRoute.describe_gas(args)}, "
                                f"{planRoute.describe_slow_zones(slow_zones)}, {planRoute.describe_first(planner)}",
                                planRoute.describe_hours(planner), planRoute.describe_combos(planner)]

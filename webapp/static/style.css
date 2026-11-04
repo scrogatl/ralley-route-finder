@@ -122,6 +122,8 @@ button.star.on { color: #e07b00; }
 button.star:hover { color: #e07b00; }
 h1 button.star { font-size: 24px; vertical-align: -1px; padding-left: 0; }
 td.fav, th.fav { width: 2em; text-align: center; padding-left: 4px; padding-right: 4px; }
+table.budgets { width: auto; }
+table.budgets tr.best td { font-weight: 600; }
 tr.favorite td { background: color-mix(in srgb, #e07b00 7%, transparent); }
 table.route td:last-child { color: var(--muted); font-size: 13px; }
 .summary { margin-top: 12px; font-variant-numeric: tabular-nums; }

@@ -85,6 +85,16 @@ DAY_SPREAD = 0.07
 STOP_TROUBLE = 0.1
 STOP_TROUBLE_MINUTES = 10
 GAS_SPREAD = 0.3
+
+# The penalty for getting back late, as (minutes late up to, percent off the
+# bonus total); later than the last is a DNF, scored 0 (--late-penalty). The
+# SNAFU 2026 rally book: 5:01-5:15 25% off, 5:16-5:30 50% off, 5:31 on DNF
+LATE_PENALTY = ((15, 25), (30, 50))
+
+# --best-budget tries time budgets from the deadline down, this far apart,
+# and stops after this many in a row don't beat the best so far
+BUDGET_STEP = 0.25
+BUDGET_PATIENCE = 3
 # Bonuses this close together (in miles) are one stop's walk apart: no leg time
 SAME_PLACE_MILES = 0.05
 # Reach a bonus with hours at least this many minutes before it closes
@@ -295,13 +305,46 @@ def add_leg_args(parser):
 def timing_options(args):
     """Planner's leg_minutes and window_margin from the command line."""
     return dict(leg_minutes=args.leg_minutes, window_margin=0 if args.ignore_hours else args.window_margin,
-                deadline=args.deadline)
+                deadline=args.deadline, late_penalty=args.late_penalty)
+
+
+def parse_late_penalty(text):
+    """'15:25,30:50' -> ((15, 25), (30, 50)), for argparse; '' for a DNF
+    as soon as you're late."""
+    try:
+        tiers = tuple(tuple(float(v) for v in tier.split(':')) for tier in text.split(',') if tier.strip())
+        if any(len(tier) != 2 or not 0 <= tier[1] <= 100 for tier in tiers) or list(tiers) != sorted(tiers):
+            raise ValueError
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected MINUTES:PERCENT,... with minutes rising, got '{text}'")
+    return tiers
+
+
+def describe_late_penalty(tiers):
+    """e.g. 'up to 15 min late 25% off, up to 30 min 50% off, later DNF'."""
+    return ", ".join([f"up to {m:g} min late {p:g}% off" if not n else f"up to {m:g} min {p:g}% off"
+                      for n, (m, p) in enumerate(tiers)] + ["later DNF" if tiers else "DNF if late"])
+
+
+def late_factor(tiers, minutes_late):
+    """The share of the bonus total kept when back this many minutes late."""
+    if minutes_late <= 0:
+        return 1.0
+    for limit, percent in tiers:
+        if minutes_late <= limit:
+            return 1 - percent / 100
+    return 0.0
 
 
 def add_hours_args(parser):
     parser.add_argument('--deadline', type=float, metavar='HOURS',
                         help='hours after the start you must be back by, for the confidence; plan for fewer --hours '
                              'to keep a reserve (default --hours)')
+    parser.add_argument('--late-penalty', type=parse_late_penalty, default=LATE_PENALTY,
+                        metavar='MINUTES:PERCENT,...',
+                        help='the penalty for being back late, for the expected score: up to MINUTES late, PERCENT '
+                             'off the bonus total; later than the last is a DNF; "" for a DNF as soon as you\'re late '
+                             f"(default {','.join(f'{m:g}:{p:g}' for m, p in LATE_PENALTY)}, as in the 2026 rally book)")
     parser.add_argument('--start', default=RALLY_START, type=start_time,
                         help=f'rally start time, HH:MM, for the hours bonuses are open (default {RALLY_START})')
     parser.add_argument('--window-margin', type=float, default=WINDOW_MARGIN, metavar='MINUTES',
@@ -378,7 +421,7 @@ class Planner:
 
     def __init__(self, hq, bonuses, hours, speed, stop_minutes, road_factor, front_load, slow_zones=(),
                  gas_miles=0, gas_minutes=0, start=RALLY_START, use_hours=True, leg_minutes=0, window_margin=0,
-                 deadline=None):
+                 deadline=None, late_penalty=None):
         self.places = [hq] + bonuses
         self.start = start
         self.max_hours = hours
@@ -386,6 +429,7 @@ class Planner:
         # measured against it. The route is planned to fit max_hours, which
         # can be shorter to leave a reserve
         self.deadline = deadline or hours
+        self.late_penalty = LATE_PENALTY if late_penalty is None else late_penalty
         self.stop_hours = stop_minutes / 60
         self.front_load = front_load
         self.gas_miles = gas_miles
@@ -956,9 +1000,10 @@ def simulate(planner, route, days=SIM_DAYS, seed=0):
     """Replay the route on simulated days; returns the share of days that
     make every bonus with hours before it closes and get back in time
     ('confidence'), the share back in time ('on_time'), the elapsed hours
-    half the days and 90% of days are back within, and each bonus with
-    hours' share of days it's missed. A missed bonus is skipped and the
-    route goes on. The same route always gives the same numbers."""
+    half the days and 90% of days are back within, each bonus with hours'
+    share of days it's missed, and the average score after the late penalty
+    ('expected'). A missed bonus is skipped, its points and any combo it's in
+    lost, and the route goes on. The same route always gives the same numbers."""
     rng = random.Random(seed)
     hours, miles, windows = planner.hours, planner.miles, planner.windows
     gas_miles, gas_hours, stop_hours = planner.gas_miles, planner.gas_hours, planner.stop_hours
@@ -977,12 +1022,14 @@ def simulate(planner, route, days=SIM_DAYS, seed=0):
     # the average time at the plan's
     leg_mean, day_mean, gas_mean = (math.exp(s * s / 2) for s in (LEG_SPREAD, DAY_SPREAD, GAS_SPREAD))
     trouble_rate = 60 / STOP_TROUBLE_MINUTES
-    made, back, finishes = 0, 0, []
+    made, back, finishes, total_score = 0, 0, [], 0
     missed = collections.Counter()
+    all_points = planner.route_points(route)
     for _ in range(days):
         day = rng.lognormvariate(0, DAY_SPREAD) / day_mean
         elapsed = 0.0
         all_made = True
+        lost = set()
         for k, (leg, gas, window, b) in enumerate(legs):
             elapsed += leg * day * rng.lognormvariate(0, LEG_SPREAD) / leg_mean
             for _ in range(gas):
@@ -993,18 +1040,24 @@ def simulate(planner, route, days=SIM_DAYS, seed=0):
                 if elapsed > window[1]:
                     missed[b] += 1
                     all_made = False
+                    lost.add(b)
                     continue
                 elapsed = max(elapsed, window[0])
             elapsed += stop_hours
             if rng.random() < STOP_TROUBLE:
                 elapsed += rng.expovariate(trouble_rate)
         finishes.append(elapsed)
+        score = all_points
+        if lost:
+            score -= sum(planner.points[b] for b in lost) + sum(points for _, points, members in planner.combos
+                                                              if members & lost and members <= set(route))
+        total_score += score * late_factor(planner.late_penalty, (elapsed - planner.deadline) * 60)
         on_time = elapsed <= planner.deadline + 1e-9
         back += on_time
         made += on_time and all_made
     finishes.sort()
     timed = [b for _, _, window, b in legs[:-1] if window]
-    return dict(days=days, deadline=planner.deadline, confidence=made / days, on_time=back / days,
+    return dict(days=days, deadline=planner.deadline, confidence=made / days, expected=total_score / days, on_time=back / days,
                 finish_p50=finishes[days // 2], finish_p90=finishes[int(days * 0.9)],
                 missed={planner.places[b]['code']: missed[b] / days for b in timed})
 
@@ -1021,7 +1074,71 @@ def describe_confidence(planner, sim):
     risky = sorted(((rate, code) for code, rate in sim['missed'].items() if rate >= 0.01), reverse=True)
     if risky:
         text += "; " + ", ".join(f"{code} missed on {rate:.0%}" for rate, code in risky)
+    text += (f". Expected score {sim['expected']:,.0f} after missed bonuses and the late penalty "
+             f"({describe_late_penalty(planner.late_penalty)})")
     return text
+
+
+def best_budget(planner, solve):
+    """Plan for time budgets from the deadline down, BUDGET_STEP apart, then
+    BUDGET_STEP / 2 either side of the best, and keep the route with the
+    highest expected score. solve(planner) plans one route for
+    planner.max_hours. Returns (route, rows), each row a dict of the budget
+    tried with its points, confidence and expected score; leaves
+    planner.max_hours at the best budget."""
+    global progress
+    report = progress
+    tried = {}
+
+    def attempt(hours):
+        """Plan for this budget; False if the --must stops don't fit it."""
+        global progress
+        hours = round(hours, 3)
+        if hours in tried:
+            return True
+        planner.max_hours = hours
+        progress = lambda text: report(f"Budget {hours:g} h: {text.strip()}")
+        try:
+            route = solve(planner)
+        except SystemExit:
+            if not tried:
+                raise
+            return False
+        tried[hours] = (route, simulate(planner, route))
+        return True
+
+    def best():
+        return max(tried, key=lambda hours: (tried[hours][1]['expected'], -hours))
+
+    try:
+        hours, since_best = planner.deadline, 0
+        while hours > planner.deadline / 2 and since_best < BUDGET_PATIENCE:
+            before = best() if tried else None
+            if not attempt(hours):
+                break
+            since_best = 0 if best() != before else since_best + 1
+            hours -= BUDGET_STEP
+        top = best()
+        for hours in (top - BUDGET_STEP / 2, top + BUDGET_STEP / 2):
+            if hours <= planner.deadline:
+                attempt(hours)
+    finally:
+        progress = report
+    top = best()
+    planner.max_hours = top
+    rows = [dict(hours=hours, points=planner.route_points(route), confidence=sim['confidence'],
+                 expected=sim['expected'], best=hours == top)
+            for hours, (route, sim) in sorted(tried.items(), reverse=True)]
+    return tried[top][0], rows
+
+
+def describe_budgets(rows):
+    """The budgets --best-budget tried, as lines of a table."""
+    lines = [f"{'Budget':>7} {'Points':>7} {'Conf.':>6} {'Expected':>9}"]
+    for row in rows:
+        lines.append(f"{row['hours']:>6g}h {row['points']:>7,} {row['confidence']:>6.0%} {row['expected']:>9,.0f}"
+                     + ("  <- best" if row['best'] else ''))
+    return lines
 
 
 def route_legs(planner, route):
@@ -1150,7 +1267,7 @@ def summary_lines(planner, route, legs):
         cutoff = planner.max_hours * fraction
         # Scores only go up along the route, combos counting when completed
         got = max(leg.score for leg in legs if leg.arrive + leg.wait <= cutoff)
-        banked.append(f"{got} ({got / last.score:.0%}) by hour {cutoff:g}" if last.score else f"0 by hour {cutoff:g}")
+        banked.append(f"{got} ({got / last.score:.0%}) by hour {cutoff:.3g}" if last.score else f"0 by hour {cutoff:.3g}")
     lines.append("Banked: " + ", ".join(banked))
     return lines
 
@@ -1204,6 +1321,10 @@ def main():
     add_hours_args(parser)
     add_avoid_args(parser)
     add_combo_args(parser)
+    parser.add_argument('--best-budget', action='store_true',
+                        help='try time budgets from the --deadline down, planning each in quick mode, and keep the '
+                             'one with the highest expected score under the --late-penalty; then, without --quick, '
+                             'plan that budget with the full search too (takes several minutes)')
     args = parser.parse_args()
 
     hq, bonuses = load_bonuses(args.csv_file)
@@ -1214,14 +1335,28 @@ def main():
                       **timing_options(args))
     apply_first(planner, args)
     apply_combos(planner, args)
-    if args.quick:
+    if args.quick or args.best_budget:
         if args.front_load:
-            sys.exit("ERROR: --quick doesn't support --front-load")
+            sys.exit(f"ERROR: {'--quick' if args.quick else '--best-budget'} doesn't support --front-load")
         import planRouteSearch
+    budgets = None
+    if args.best_budget:
+        route, budgets = best_budget(planner, lambda p: planRouteSearch.quick_route(p, max(1, args.workers)))
+        if not args.quick:
+            # The full search may do better on the budget found
+            full = planner.solve(START_WEIGHTS, args.max_drop, max(1, args.workers))
+            if simulate(planner, full)['expected'] > simulate(planner, route)['expected']:
+                route = full
+    elif args.quick:
         route = planRouteSearch.quick_route(planner, max(1, args.workers))
     else:
         route = planner.solve(START_WEIGHTS, args.max_drop, max(1, args.workers))
-    print(f"{len(bonuses)} bonuses, {args.hours} hours at {args.speed} MPH, "
+    if budgets:
+        print("Time budgets tried, for a deadline of {:g} hours:".format(planner.deadline))
+        for line in describe_budgets(budgets):
+            print("  " + line)
+        print()
+    print(f"{len(bonuses)} bonuses, {planner.max_hours:g} hours at {args.speed} MPH, "
           f"{args.stop_minutes:g} min per stop, {args.leg_minutes:g} per leg, road factor {args.road_factor:g}, "
           f"front-load {args.front_load:g}" + (", quick (beam search)" if args.quick else ""))
     print(f"{describe_gas(args)}, {describe_slow_zones(slow_zones)}, {describe_first(planner)}")

@@ -304,6 +304,8 @@ PyPy.
 | --- | --- | --- |
 | `--hours` | 10 | Time budget, Rally HQ to Rally HQ |
 | `--deadline` | `--hours` | Hours after the start you must be back by; confidence is measured against it |
+| `--late-penalty` | `15:25,30:50` | The penalty for being back late, for the expected score: up to MINUTES late, PERCENT off; later than the last is a DNF |
+| `--best-budget` | off | Try budgets from the deadline down and keep the one with the highest expected score (see [Confidence](#confidence)) |
 | `--speed` | 50 | Average speed in MPH |
 | `--stop-minutes` | 5 | Time at each bonus to take its picture |
 | `--leg-minutes` | 3 | Time every leg takes on top of driving: leaving the main road, finding the bonus, parking. None between bonuses at the same spot (see below) |
@@ -464,6 +466,61 @@ or plan without it.
   number, so treat it as a comparison between routes more than a forecast.
   A GPS track of a real rally day, compared leg by leg and stop by stop
   with its plan, would measure them.
+
+#### Expected score and the best time budget
+
+Confidence alone doesn't say which budget to ride: more points with more
+risk, or fewer points made safely? The rally's late penalty settles it. The
+2026 rally book:
+
+| Back at HQ | Penalty |
+|---|---|
+| by 5:00 PM | none |
+| 5:01–5:15 | 25% off the bonus total |
+| 5:16–5:30 | 50% off |
+| 5:31 or later | DNF, scored 0 |
+
+So each simulated day also gets a score: the route's points, less any bonus
+reached after it closed (and any combo that needed it), less the late
+penalty. The **expected score** is the average over the 2,000 days. It's on
+the confidence line, in the web app's **Exp.** column, and in a box on the
+scenario's page. Set the penalty with `--late-penalty` (the web form's
+**Late penalty** field) as `MINUTES:PERCENT` pairs: `15:25,30:50`, the
+default, is the 2026 rule, and anything later than the last pair is a DNF.
+An empty value means a DNF as soon as you're late.
+
+`--best-budget` (the web form's **Find the best time budget** switch) finds
+the budget with the highest expected score for the deadline. It plans in
+quick mode for budgets from the deadline down, a quarter hour apart, until
+three in a row don't beat the best, then an eighth of an hour either side of
+the best. Without `--quick` it then plans the winning budget with the full
+search too, and keeps whichever route expects more. The time budget setting
+is ignored. It takes about a minute in quick mode on the development machine; the web app
+shows the budgets it tried in a table on the scenario's page.
+
+```bash
+python planRoute.py bonus-lat-lon-points.csv --best-budget --deadline 10 --quick
+```
+
+With the 2026 defaults:
+
+| Budget | Points planned | Confidence | Expected score |
+|---|---|---|---|
+| 10 h | 8,487 | 41% | 4,581 |
+| 9½ h | 7,815 | 64% | 5,897 |
+| 9 h | 7,349 | 77% | 6,221 |
+| 8¾ h | 7,233 | 85% | 6,562 |
+| **8⅝ h** | **7,092** | **90%** | **6,666** (best) |
+| 8½ h | 6,949 | 91% | 6,609 |
+| 8 h | 6,354 | 97% | 6,251 |
+| 7¾ h | 6,070 | 98% | 6,019 |
+
+Riding the full 10 hours plans the most points but expects the fewest:
+most of its days run late, and those past 5:30 score nothing. Below 8⅝
+hours each quarter hour gives up more points than it saves in penalties.
+The best budget barely moves with the guessed spreads: gentler ones (day
+±3.5%, 1 stop in 20 running long, legs ±20%) put it at 8¾ hours, harsher
+ones (day ±10%, 1 stop in 7) at 8⅝. Either way, 8½–8¾ hours.
 
 ### Slow zones
 
