@@ -68,11 +68,27 @@ book) live in their own folder, e.g. `SNAFU_2026/`.
     more shows a 9. The number reads without relying on color; color only
     backs it up, blue under 500 points and red from 500 (no green, which is
     hard to tell from red with red-green color blindness). Garmin BaseCamp
-    and GPS units show these symbols; GPX Studio doesn't support them and
-    shows a plain marker, so there the name carries the points. To change the
-    colors or where they switch, edit `HIGH_POINTS`, `LOW_COLOR` and
-    `HIGH_COLOR` at the top of `extractDatafromGPX.py`. Everything else in the
-    file is unchanged.
+    and GPS units show these symbols. To change the colors or where they
+    switch, edit `HIGH_POINTS`, `LOW_COLOR` and `HIGH_COLOR` at the top of
+    `extractDatafromGPX.py`. Everything else in the file is unchanged.
+
+    GPX Studio doesn't show Garmin's number symbols, only its own list of
+    about 40 Garmin names (Summit, Alert, Gas Station and so on), so the
+    script also writes `bonus-lat-lon-points-gpxstudio.gpx`: the same file,
+    with a GPX Studio icon for each bonus's points. Load that one into GPX
+    Studio, and the other into BaseCamp or a GPS.
+
+    | Points | Symbol | GPX Studio icon |
+    |---|---|---|
+    | 800 and up | Summit | mountain |
+    | 500–799 | Alert | warning triangle |
+    | 300–499 | Binoculars | binoculars |
+    | under 300 | Information | ⓘ |
+    | Rally HQ | House | house |
+
+    To change them, edit `GPX_STUDIO_SYMBOLS` and `GPX_STUDIO_HQ`; the
+    names GPX Studio knows are in its
+    [symbols.ts](https://github.com/gpxstudio/gpx.studio/blob/main/website/src/lib/assets/symbols.ts).
 
     ```bash
     python extractDatafromGPX.py "SNAFU_2026/2026 SNAFU Bonus_Code-Lat-Long-Points_CSV - Rev E.csv" "SNAFU_2026/SNAFU 2026 - MASTER cao 11 Aug 26.gpx" "SNAFU_2026/2026 SNAFU Rally Book Rev I.pdf"

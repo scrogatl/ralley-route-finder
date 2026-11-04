@@ -12,7 +12,9 @@ current directory, overwriting any earlier ones:
                             points and the bonuses it needs
   bonus-lat-lon-points.gpx  the GPX with each bonus's points (and hours and
                             combos) in its name and description, for viewing
-                            in BaseCamp, a GPS or GPX Studio
+                            in BaseCamp or on a GPS, with Garmin number symbols
+  bonus-lat-lon-points-gpxstudio.gpx
+                            the same, with symbols GPX Studio shows instead
 
 Without the rally book, the CSV has no hours and bonus-combos.csv isn't
 written (an old one is left as it was). Check the warnings: a bonus with no
@@ -180,6 +182,13 @@ LOW_COLOR, HIGH_COLOR = "Blue", "Red"
 # Copy of the GPX with each bonus's points in its description
 POINTS_GPX = 'bonus-lat-lon-points.gpx'
 
+# The same for GPX Studio, which ignores Garmin's number symbols and shows
+# only its own short list (an icon for each of about 40 Garmin names), so
+# there each bonus gets an icon for its points: (lowest points, symbol)
+GPX_STUDIO_GPX = 'bonus-lat-lon-points-gpxstudio.gpx'
+GPX_STUDIO_SYMBOLS = [(800, 'Summit'), (500, 'Alert'), (300, 'Binoculars'), (0, 'Information')]
+GPX_STUDIO_HQ = 'House'
+
 # Define the State tags using their full namespaces
 GPXX_STATE_TAG = GPXX_NAMESPACE + "State"
 WPTX1_STATE_TAG = WPTX1_NAMESPACE + "State"
@@ -217,10 +226,16 @@ def add_points_to_desc(bonus, points, hours=None, combo_codes=()):
         desc.tail = before.tail if before is not None else None
     desc.text = f"{points} - {desc.text.strip()}" if (desc.text or '').strip() else points
 
-def set_symbol(bonus, points):
-    """Use the Garmin number symbol for this many points."""
+def garmin_symbol(points):
+    """The Garmin number symbol for this many points."""
     points = int(points)
-    symbol = f"Number {min(points // 100, 9)}, {HIGH_COLOR if points >= HIGH_POINTS else LOW_COLOR}"
+    return f"Number {min(points // 100, 9)}, {HIGH_COLOR if points >= HIGH_POINTS else LOW_COLOR}"
+
+def gpx_studio_symbol(points):
+    return next(symbol for lowest, symbol in GPX_STUDIO_SYMBOLS if int(points) >= lowest)
+
+def set_symbol(bonus, symbol):
+    """Set the waypoint's symbol; returns its sym element."""
     sym = bonus.find(SYM_TAG)
     if sym is None:
         # GPX wants sym after name, cmt, desc and any links
@@ -229,11 +244,16 @@ def set_symbol(bonus, points):
         bonus.insert(list(bonus).index(before) + 1, sym)
         sym.tail = before.tail
     sym.text = symbol
+    return sym
 
 # Rally HQ is the start/finish of every route, so the GPX must have it
 hq_names = [w.findtext(NAME_TAG, '').strip() for w in root.findall(WPT_TAG)]
 if not any(is_rally_hq(name) for name in hq_names):
     sys.exit(f"ERROR: no 'Rally HQ' waypoint found in {gpx_file_path}")
+
+# Each waypoint's sym element and its symbol for GPX Studio, swapped in
+# after the Garmin copy is written
+gpx_studio_syms = []
 
 # Create merged file with lat-lon from GPX and bonus 
 #   details from CSV file
@@ -260,6 +280,7 @@ with open('bonus-lat-lon-points.csv', 'w') as f:
             # Rally HQ is the start/finish, not a bonus, so it's always worth
             # nothing, whatever the CSV says
             points = 0
+            gpx_studio_syms.append((set_symbol(bonus, bonus.findtext(SYM_TAG) or GPX_STUDIO_HQ), GPX_STUDIO_HQ))
         elif code in points_by_code:
             points = points_by_code[code]
             if bonus_hours is not None and code not in bonus_hours:
@@ -267,9 +288,9 @@ with open('bonus-lat-lon-points.csv', 'w') as f:
                       f"assuming 24 hours", file=sys.stderr)
             hours = bonus_hours.get(code) if bonus_hours else None
             add_points_to_desc(bonus, points, hours, combos_of.get(code, ()))
-            set_symbol(bonus, points)
+            gpx_studio_syms.append((set_symbol(bonus, garmin_symbol(points)), gpx_studio_symbol(points)))
             # Points in the name too, e.g. "ABAC 510", for apps that ignore
-            # Garmin symbols (GPX Studio); only in the GPX copy, not the CSV
+            # Garmin symbols; only in the GPX copies, not the CSV
             name_element.text = f"{code} {points}"
         else:
             print(f"WARNING: no points found in {csv_file_path} for waypoint '{code}'", file=sys.stderr)
@@ -295,3 +316,11 @@ tree.write(POINTS_GPX, encoding='utf-8', xml_declaration=True)
 print(f"GPX with points in each name and description written to {POINTS_GPX}; each bonus's symbol is its points "
       f"in hundreds (9 = 900 or more), {LOW_COLOR.lower()} under {HIGH_POINTS} points, "
       f"{HIGH_COLOR.lower()} from {HIGH_POINTS}", file=sys.stderr)
+
+for sym, symbol in gpx_studio_syms:
+    sym.text = symbol
+tree.write(GPX_STUDIO_GPX, encoding='utf-8', xml_declaration=True)
+print(f"The same for GPX Studio written to {GPX_STUDIO_GPX}; each bonus's symbol is "
+      + ", ".join(f"{symbol} from {lowest}" if lowest else f"{symbol} below {GPX_STUDIO_SYMBOLS[-2][0]}"
+                  for lowest, symbol in GPX_STUDIO_SYMBOLS)
+      + f" points, Rally HQ {GPX_STUDIO_HQ}", file=sys.stderr)
