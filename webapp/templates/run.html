@@ -58,6 +58,7 @@
       <div><span>{{ run.stops }}</span>bonuses</div>
       <div><span>{{ run.miles }}</span>est. miles</div>
       <div><span>{{ run.hours }}</span>of {{ run.settings.hours }} hours</div>
+      {% if run.confidence is defined %}<div title="{{ run.confidence_text }}"><span>{{ run.confidence }}%</span>confidence</div>{% endif %}
       <div><span>{{ run.seconds }} s</span>to plan</div>
     </div>
     <p class="actions">
@@ -109,6 +110,7 @@
   </div>
   <div class="summary">
     {% for line in run.summary %}<p>{{ line }}</p>{% endfor %}
+    {% if run.confidence_text %}<p>{{ run.confidence_text }}</p>{% endif %}
   </div>
   <details>
     <summary>Planner settings</summary>

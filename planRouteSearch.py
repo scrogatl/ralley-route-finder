@@ -430,11 +430,12 @@ def main():
     planRoute.add_gas_args(parser)
     planRoute.add_first_args(parser)
     planRoute.add_hours_args(parser)
+    planRoute.add_avoid_args(parser)
     planRoute.add_combo_args(parser)
     args = parser.parse_args()
 
     hq, bonuses = load_bonuses(args.csv_file)
-    bonuses = planRoute.without_timed(bonuses, args)
+    bonuses = planRoute.planned_bonuses(bonuses, args)
     slow_zones = planRoute.slow_zones_from_args(args)
     planner = Planner(hq, bonuses, args.hours, args.speed, args.stop_minutes, args.road_factor, 0,
                       slow_zones, args.gas_miles, args.gas_minutes, args.start, not args.ignore_hours,

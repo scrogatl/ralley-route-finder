@@ -8,7 +8,7 @@
         into its data folder.</p>
     {% endif %}
     {% if error %}<p class="error">{{ error }}</p>{% endif %}
-    <form method="post" action="{{ url_for('start_run') }}">
+    <form method="post" action="{{ url_for('start_run') }}" autocomplete="off">
       <label class="field wide">
         <span>Name <small>optional, e.g. "fast photos"</small></span>
         <input name="name" maxlength="60" value="{{ settings.get('name', '') }}">
@@ -41,7 +41,10 @@
           </label>
         {% endfor %}
       </div>
-      <button type="submit">Plan route</button>
+      <div class="actions">
+        <button type="submit">Plan route</button>
+        <a class="button secondary" href="{{ url_for('index') }}" title="Put every setting back to its default">Reset</a>
+      </div>
       <p class="note">A run takes about a minute or two, or a few seconds in quick mode. Runs go one at
         a time; the same settings show the saved result straight away.</p>
     </form>
@@ -53,7 +56,7 @@
       <div class="table-wrap">
         <table class="runs sortable" data-remember="runs">
           <thead>
-            <tr><th class="num fav" aria-label="Favorite">★</th><th class="num">Points</th><th class="num">Stops</th><th class="num">Hours</th><th class="num">Pts/mi</th><th>Settings</th><th>Run</th></tr>
+            <tr><th class="num fav" aria-label="Favorite">★</th><th class="num">Points</th><th class="num">Stops</th><th class="num">Hours</th><th class="num">Miles</th><th class="num">Pts/mi</th><th class="num" title="Share of simulated days that make every bonus and get back in time">Conf.</th><th class="num" title="When half and 90% of simulated days are back at HQ; sorts by the 90% time">Back by</th><th>Settings</th><th>Run</th></tr>
           </thead>
           <tbody>
             {% for run in runs %}
@@ -67,7 +70,12 @@
                 </td>
                 <td class="num">{{ run.stops if run.status == 'done' else '' }}</td>
                 <td class="num">{{ run.hours if run.status == 'done' else '' }}</td>
+                <td class="num">{{ '{:,.0f}'.format(run.miles) if run.status == 'done' and run.miles else '' }}</td>
                 <td class="num">{{ '%.1f' % (run.points / run.miles) if run.status == 'done' and run.miles else '' }}</td>
+                <td class="num">{{ '%d%%' % run.confidence if run.confidence is defined else '' }}</td>
+                <td class="num" data-sort="{{ run.back_by.most_minutes if run.back_by else '' }}">{% if run.back_by %}
+                  <span title="Half of simulated days are back by {{ run.back_by.half }}, 90% by {{ run.back_by.most }}">{{ run.back_by.half }} <small class="muted">to</small> {{ run.back_by.most }}</span>
+                {% endif %}</td>
                 <td class="settings">{% if run.name %}<strong>{{ run.name }}</strong><br>{% endif %}{{ describe(run.settings) }}</td>
                 <td class="muted when" data-sort="{{ run.created }}"><time datetime="{{ run.created }}">{{ run.created[5:16].replace('T', ' ') }} UTC</time><br><span class="id" title="Scenario ID">{{ run.id }}</span></td>
               </tr>

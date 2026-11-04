@@ -303,6 +303,7 @@ PyPy.
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `--hours` | 10 | Time budget, Rally HQ to Rally HQ |
+| `--deadline` | `--hours` | Hours after the start you must be back by; confidence is measured against it |
 | `--speed` | 50 | Average speed in MPH |
 | `--stop-minutes` | 5 | Time at each bonus to take its picture |
 | `--leg-minutes` | 3 | Time every leg takes on top of driving: leaving the main road, finding the bonus, parking. None between bonuses at the same spot (see below) |
@@ -322,6 +323,9 @@ PyPy.
 | `--window-margin` | 10 | Reach a bonus with hours at least this many minutes before it closes |
 | `--ignore-hours` | | Plan as if every bonus is open all day |
 | `--skip-timed` | | Leave out every bonus with opening hours |
+| `--avoid-savannah` | | Leave out the bonuses within 10 miles of downtown Savannah (SCAD, GHIS, WBHH, ASCC in 2026) |
+| `--avoid-augusta` | | Leave out the bonuses within 8 miles of downtown Augusta (AORC, AUGA, MEDC in 2026) |
+| `--avoid` | | `LAT,LON,RADIUS_MILES`: leave out every bonus inside this circle; repeat for more |
 | `--combos` | bonus-combos.csv | Combo bonuses from the rally book, used if the file exists |
 | `--ignore-combos` | | Plan without the combo bonuses |
 | `--workers` | all cores | How many CPU cores to search with |
@@ -351,6 +355,116 @@ slip from costing the bonus.
 Numbers quoted elsewhere in this README come from before these two
 settings; add `--leg-minutes 0 --window-margin 0` to plan as they did.
 
+### Confidence
+
+Under the route, every planner prints how likely the day is to go as
+planned, and the web app shows it with each scenario: in the list, the
+**Conf.** column and a **Back by** column with when half and 90% of the
+simulated days are back (e.g. `17:01 to 18:45`; it sorts by the 90% time),
+and on the scenario's page, a box and the full line:
+
+```
+Confidence: 46% of 2,000 simulated days make every bonus and get back by 17:00; half are back by 17:01, 90% by 18:45; VALD missed on 36%
+```
+
+It replays the route on 2,000 simulated days, drawing each leg's time and
+each stop at random around the plan, and counts the days that reach every
+bonus with hours before it closes and get back to HQ in time. A bonus
+reached after it closes is skipped and the day goes on. It uses no Google
+calls, and the same route always gives the same number. On each day:
+
+| What varies | How much | Where it comes from |
+|---|---|---|
+| Each leg's time | ±30% (standard deviation) | Google's times on 24 legs of two 2026 checks, against the plan's |
+| The whole day, every leg at once | ±7% | a guess: weather, traffic, the rider |
+| A stop running long | 1 stop in 10, by 10 min on average | a guess: no parking, a hard-to-find sign, a wrong turn |
+| A gas stop | ±30% | a guess |
+
+Every leg and gas stop averages the plan's time, so only the long stops
+add time on average, about a minute a stop. To change these, edit
+`LEG_SPREAD`, `DAY_SPREAD`, `STOP_TROUBLE`, `STOP_TROUBLE_MINUTES` and
+`GAS_SPREAD` at the top of `planRoute.py`.
+
+#### Why a full route scores 35–50%
+
+With the time budget at the deadline, the planner fills the day: the 2026 routes finish at 9.9 to 10.0 of 10
+hours, with no reserve. Any delay makes such a route late, and on a real day
+some legs run long, so about half the simulated days go a little over. The
+14 ten-hour scenarios saved in November 2026 scored 34–49%; the three planned
+for 8¾ or 9 hours against a 10-hour deadline scored 82–86%. A low number on a full
+route doesn't mean the plan is bad; it means the plan has no slack, and the
+**90% time** says how much slack covers most days.
+
+#### What makes a day run long
+
+Turning each kind of variation on alone, for the 8,487-point quick route
+(10 hours, back by 17:00 as planned, with 8.3 hours of driving in 17 legs):
+
+| Varying only | Confidence | Half back by | 90% back by |
+|---|---|---|---|
+| nothing | 100% | 16:59 | 16:59 |
+| each leg (±30%) | 53% | 16:56 | 18:01 |
+| the whole day (±7%) | 52% | 16:58 | 17:44 |
+| stops running long (1 in 10, ~10 min) | 23% | 17:09 | 17:40 |
+| all of them | 41% | 17:12 | 18:37 |
+
+- **The whole day** matters most for its size. 7% doesn't sound like much,
+  but it applies to all 8.3 hours of driving at once, so it moves the 90%
+  time about 45 minutes. Leg-to-leg errors partly cancel over 17 legs; a
+  day-wide slowdown doesn't.
+- **Each leg** spreads the finish most, mostly through the few long legs:
+  the three legs over an hour each make up most of it. Short hops between
+  nearby bonuses hardly matter.
+- **Stops running long** are the only thing that adds time on average
+  (about a minute a stop), so they push even the typical day past the
+  deadline; that's why confidence drops to 23% with stops alone.
+
+#### The trade-off: points for reserve
+
+There are two time settings. The **time budget** (`--hours`) is what the
+planner fills; the **deadline** (`--deadline`) is when you must be back at
+HQ, and confidence is measured against it. Plan for less than the deadline
+to keep a reserve. On the command line the deadline defaults to the time
+budget; on the web form it's its own field, 10 hours by default, and a
+budget over the deadline is refused. Scenarios saved before the deadline
+was a setting were scored again against 10 hours (or their own budget, if
+longer).
+
+With the 2026 defaults, a 10-hour deadline (17:00), in quick mode:
+
+| Time budget | Points | Confidence | 90% of days back by |
+|---|---|---|---|
+| 10 hours | 8,487 | 41% | 18:37 |
+| 9½ hours | 7,815 | 64% | 17:53 |
+| 9 hours | 7,349 | 77% | 17:32 |
+| 8¾ hours | 7,233 | 85% | 17:14 |
+| 8½ hours | 6,949 | 91% | 16:51 |
+| 8¼ hours | 6,525 | 93% | 16:38 |
+
+```bash
+python planRoute.py bonus-lat-lon-points.csv --hours 8.75 --deadline 10
+```
+
+To be back by 17:00 on nine days in ten, plan for about 8½ hours, which
+costs about 1,500 points (18%). Whether that's worth it depends on the
+rally's penalty for being late against the points; a plan in between, say
+9 hours, is late on fewer days without giving up as much.
+
+A bonus's **miss rate** says which closing time is tight: on the top
+November scenario, VALD was missed on 36% of days. Raise
+`--window-margin` (the web app's bonus hours margin) to reach it earlier,
+or plan without it.
+
+#### What's measured and what's a guess
+
+- **Measured:** the ±30% per leg, from the two saved Google checks (24
+  legs). Each new Google check gives more legs to measure it with.
+- **Guesses:** the ±7% for the whole day, the 1-in-10 stop running about
+  10 minutes long, and the gas stop spread. These matter most for the
+  number, so treat it as a comparison between routes more than a forecast.
+  A GPS track of a real rally day, compared leg by leg and stop by stop
+  with its plan, would measure them.
+
 ### Slow zones
 
 A slow zone is a circle where the planner drives at a lower speed: the part
@@ -361,6 +475,16 @@ gets planned. On the saved Google checks, legs near Atlanta averaged about
 28 straight-line miles an hour against 39 elsewhere, so without the zone the
 planner would happily route through Atlanta and Google would then say it's
 over time.
+
+`--avoid-savannah` and `--avoid-augusta` (the web app's "Avoid Savannah" and
+"Avoid Augusta" switches) leave out each city's own bonuses, for a day that
+stays out of its traffic and parking. Each circle takes in the city's
+cluster and stops short of the next bonus out: Savannah's four are within
+8 miles of downtown and the next is 24 out; Augusta's three are within 3 miles
+and the next, HEPH, is 13 out. A route can still drive through the city;
+only its bonuses are left out. For another place, or a bigger circle, use
+`--avoid LAT,LON,RADIUS_MILES`, or change `SAVANNAH_AVOID` and
+`AUGUSTA_AVOID` at the top of `planRoute.py`.
 
 `--athens-slow-zone` (the web app's "Athens slow zone" switch) adds 3 miles
 around downtown Athens and UGA at 20 MPH. It's off by default because the

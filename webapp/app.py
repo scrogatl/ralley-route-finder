@@ -66,7 +66,10 @@ MAX_QUEUED = 10
 
 # The form: (name, label, default, lowest, highest, help)
 NUMBERS = [
-    ('hours', 'Time budget, hours', planRoute.DEFAULT_HOURS, 1, 12, 'Rally HQ to Rally HQ'),
+    ('hours', 'Time budget, hours', planRoute.DEFAULT_HOURS, 1, 12,
+     'what the route is planned to fill, Rally HQ to Rally HQ; less than the deadline keeps a reserve'),
+    ('deadline', 'Deadline, hours', planRoute.DEFAULT_HOURS, 1, 12,
+     'when you must be back at HQ, after the start; confidence is measured against it'),
     ('speed', 'Average speed, MPH', planRoute.DEFAULT_SPEED, 20, 80,
      'with minutes per leg, Google checks of 2026 routes fit 50-54'),
     ('stop_minutes', 'Minutes at each bonus', 5, 0, 30, 'to take its picture'),
@@ -82,6 +85,8 @@ NUMBERS = [
 SWITCHES = [
     ('slow_zone', 'Atlanta slow zone', True, 'inside I-285 plus about 5 miles at 25 MPH'),
     ('athens_zone', 'Athens slow zone', False, 'about 3 miles around downtown Athens and UGA at 20 MPH'),
+    ('avoid_savannah', 'Avoid Savannah', False, 'leave out the bonuses within 10 miles of downtown'),
+    ('avoid_augusta', 'Avoid Augusta', False, 'leave out the bonuses within 8 miles of downtown'),
     ('use_hours', 'Bonus hours', True, "only count bonuses reached while they're open"),
     ('skip_timed', 'Leave out bonuses with hours', False, 'plan only the bonuses open all day'),
     ('use_combos', 'Combo bonuses', True, 'add combo points for getting every bonus in one'),
@@ -89,8 +94,9 @@ SWITCHES = [
     ('quick', 'Quick mode', False, 'beam search: about 4x faster and as good on the 2026 bonuses, but it may '
                                    'miss a better route; no front-load'),
 ]
-# How the list of runs describes a switch that's off (the Athens zone,
-# leaving out timed bonuses, only and quick, off by default, are described when on)
+# How the list of runs describes a switch that's off (the Athens zone, the
+# avoided cities, leaving out timed bonuses, only and quick, off by default,
+# are described when on)
 SWITCHED_OFF = {'slow_zone': 'no Atlanta slow zone', 'use_hours': 'bonus hours ignored', 'use_combos': 'no combos'}
 DEFAULTS = {name: default for name, _, default, *_ in NUMBERS} | {name: on for name, _, on, _ in SWITCHES} | {
     'must': '', 'start': planRoute.RALLY_START}
@@ -213,6 +219,8 @@ def read_form(form):
     except argparse.ArgumentTypeError as error:
         raise ValueError(f"Rally start: {error}")
     settings['must'] = ','.join(code.strip().upper() for code in form.get('must', '').split(',') if code.strip())
+    if settings['hours'] > settings['deadline']:
+        raise ValueError("Time budget: must be no more than the deadline")
     if settings['only'] and not settings['must']:
         raise ValueError("Only the must-visit bonuses: list the bonuses in Must visit")
     if settings['quick'] and settings['front_load']:
@@ -222,8 +230,10 @@ def read_form(form):
 
 def describe(settings):
     """A short line for the list of runs, e.g. '9.5 h, 46 MPH, 4 min stops, road x1.22'."""
-    parts = [f"{settings['hours']:g} h", f"{settings['speed']:g} MPH", f"{settings['stop_minutes']:g} min stops",
-             f"road ×{settings['road_factor']:g}"]
+    # Runs from before the deadline setting had it at the time budget
+    deadline = settings.get('deadline', settings['hours'])
+    parts = [f"{settings['hours']:g} h" + (f" of {deadline:g}" if deadline > settings['hours'] else ''),
+             f"{settings['speed']:g} MPH", f"{settings['stop_minutes']:g} min stops", f"road ×{settings['road_factor']:g}"]
     # Runs from before these settings had neither
     if settings.get('leg_minutes'):
         parts.append(f"{settings['leg_minutes']:g} min legs")
@@ -247,6 +257,10 @@ def describe(settings):
         parts.append('bonuses with hours left out')
     if settings.get('athens_zone'):
         parts.append('Athens slow zone')
+    if settings.get('avoid_savannah'):
+        parts.append('avoid Savannah')
+    if settings.get('avoid_augusta'):
+        parts.append('avoid Augusta')
     if settings.get('only'):
         parts.append('only those')
     if settings.get('quick'):
@@ -257,7 +271,9 @@ def describe(settings):
 def planner_args(settings):
     """The command-line arguments planRoute's helpers read, from a run's settings."""
     return argparse.Namespace(first=settings.get('first'), must=settings.get('must'), only=settings.get('only'),
-                              skip_timed=settings.get('skip_timed', False),
+                              skip_timed=settings.get('skip_timed', False), avoid=[],
+                              avoid_savannah=settings.get('avoid_savannah', False),
+                              avoid_augusta=settings.get('avoid_augusta', False),
                               gas_miles=settings['gas_miles'], gas_minutes=settings['gas_minutes'],
                               combos=COMBOS_CSV, ignore_combos=not settings['use_combos'])
 
@@ -267,14 +283,15 @@ def make_planner(settings, args):
     returns (planner, bonuses, slow zones). Exits (SystemExit) on bad input,
     e.g. an unknown must-visit code."""
     hq, bonuses = planRoute.load_bonuses(BONUS_CSV)
-    bonuses = planRoute.without_timed(bonuses, args)
+    bonuses = planRoute.planned_bonuses(bonuses, args)
     slow_zones = (([planRoute.ATLANTA_SLOW_ZONE] if settings['slow_zone'] else [])
                   + ([planRoute.ATHENS_SLOW_ZONE] if settings.get('athens_zone') else []))
     planner = planRoute.Planner(hq, bonuses, settings['hours'], settings['speed'], settings['stop_minutes'],
                                 settings['road_factor'], settings['front_load'], slow_zones,
                                 settings['gas_miles'], settings['gas_minutes'], settings['start'],
                                 settings['use_hours'], leg_minutes=settings.get('leg_minutes', 0),
-                                window_margin=settings.get('window_margin', 0) if settings['use_hours'] else 0)
+                                window_margin=settings.get('window_margin', 0) if settings['use_hours'] else 0,
+                                deadline=settings.get('deadline', settings['hours']))
     planRoute.apply_first(planner, args)
     planRoute.apply_combos(planner, args)
     return planner, bonuses, slow_zones
@@ -314,6 +331,44 @@ def plan(run):
     save_worker_copy(run)
 
 
+def confidence(planner, route):
+    """The run's confidence fields: the share of simulated days that go as
+    planned, when half and 90% of them are back, and the line describing it."""
+    sim = planRoute.simulate(planner, route)
+    return dict(confidence=round(sim['confidence'] * 100), confidence_text=planRoute.describe_confidence(planner, sim),
+                back_by=dict(half=planRoute.time_of_day(planner, sim['finish_p50']),
+                             most=planRoute.time_of_day(planner, sim['finish_p90']),
+                             # For sorting: minutes after midnight 90% are back by
+                             most_minutes=round((planRoute.clock_hours(planner.start) + sim['finish_p90']) * 60)))
+
+
+def needs_confidence(run):
+    """True for a run from before confidence was simulated, or before the
+    deadline was a setting of its own."""
+    return run['status'] == 'done' and ('back_by' not in run or 'deadline' not in run['settings'])
+
+
+def add_confidence(run_id):
+    """Give a run from before confidence was simulated, or before the
+    deadline setting, its confidence, once. Such a run's deadline is the
+    form's default or its time budget, whichever is later. Left off if the
+    bonus data has changed so its stops can't be found."""
+    with save_lock:
+        run = load_run(run_id)
+        if not needs_confidence(run):
+            return run
+        run['settings'].setdefault('deadline', max(run['settings']['hours'], planRoute.DEFAULT_HOURS))
+        try:
+            planner, _, _ = make_planner(run['settings'], planner_args(run['settings']))
+            index = {place['code']: i for i, place in enumerate(planner.places) if i}
+            route = [index[leg['code']] for leg in run['legs'] if leg['code'] in index or 'Rally' not in leg['code']]
+        except (SystemExit, KeyError):
+            return run
+        run.update(confidence(planner, route))
+        save_run(run)
+        return run
+
+
 def finish_run(run, planner, route, bonuses, slow_zones, args, seconds):
     """Fill in a run's route, table and GPX file, and mark it done."""
     settings = run['settings']
@@ -329,6 +384,7 @@ def finish_run(run, planner, route, bonuses, slow_zones, args, seconds):
                               + (["Quick mode: beam search (width 2000, branch 12), then planRoute.py's "
                                   "drop-and-reinsert search"] if settings.get('quick') else []),
                summary=planRoute.summary_lines(planner, route, legs),
+               **confidence(planner, route),
                legs=[dict(code=leg.place['code'], state=leg.place['state'], points=leg.place['points'],
                           lat=leg.place['lat'], lon=leg.place['lon'], leg_miles=round(leg.leg_miles, 1),
                           miles=round(leg.miles, 1), leave=round(leg.hours, 2),
@@ -407,8 +463,10 @@ def index():
     settings = DEFAULTS
     if request.args.get('from'):
         settings = DEFAULTS | load_run(request.args['from'])['settings']
+    runs = [add_confidence(run['id']) if needs_confidence(run) else run
+            for run in all_runs()]
     return render_template('index.html', numbers=NUMBERS, switches=SWITCHES, settings=settings,
-                           runs=all_runs(), describe=describe, error=None,
+                           runs=runs, describe=describe, error=None,
                            has_data=os.path.exists(BONUS_CSV))
 
 
@@ -466,6 +524,8 @@ def render_run(run, google_error=None, status=200):
                 if 'fit' not in check:
                     check['fit'] = fit_check(run, check)
             save_run(run)
+    if needs_confidence(run) and os.path.exists(BONUS_CSV):
+        run = add_confidence(run_id)
     bonuses = []
     if run['status'] == 'done' and os.path.exists(BONUS_CSV):
         _, bonuses = planRoute.load_bonuses(BONUS_CSV)

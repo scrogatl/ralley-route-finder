@@ -28,7 +28,7 @@ thorough rather than fast: expect several minutes.
 
     python planRoute.py bonus-lat-lon-points.csv --hours 10 --speed 45
 """
-import argparse, collections, csv, itertools, math, multiprocessing, os, signal, sys, time
+import argparse, collections, csv, itertools, math, multiprocessing, os, random, signal, sys, time
 import xml.etree.ElementTree as ET
 from datetime import datetime
 
@@ -41,6 +41,12 @@ ATLANTA_SLOW_ZONE = dict(lat=33.78, lon=-84.39, radius=15, mph=25)
 # Downtown Athens and UGA (--athens-slow-zone), fitted to Google's times on
 # 2026 legs: its short in-town hops took about twice the open-road time
 ATHENS_SLOW_ZONE = dict(lat=33.951, lon=-83.376, radius=3, mph=20)
+# Cities to leave out (--avoid-savannah, --avoid-augusta): every bonus within
+# the radius of downtown. Each radius takes in the city's own cluster of
+# bonuses (2026: Savannah's 4 within 8 miles, the next 24 out; Augusta's 3
+# within 3 miles, the next 13 out)
+SAVANNAH_AVOID = dict(lat=32.081, lon=-81.091, radius=10)
+AUGUSTA_AVOID = dict(lat=33.474, lon=-82.011, radius=8)
 
 # Each starting route trades points against extra time differently; the
 # search improves every one and keeps the best
@@ -62,6 +68,23 @@ RALLY_START = '07:00'
 # 342) where without it they took half; the best speed then is about 54 MPH
 # at road factor 1.23
 LEG_MINUTES = 3
+
+# Confidence: the route is replayed on this many simulated days, each leg's
+# time and each stop drawn at random around the plan, to see how often it
+# makes every bonus while it's open and gets back in time.
+# - LEG_SPREAD: one leg's time, as the standard deviation of its log; Google's
+#   times on 24 legs of two 2026 checks were within about 30% of the plan's
+# - DAY_SPREAD: the same for the whole day, every leg at once (weather,
+#   traffic, the rider); a guess
+# - STOP_TROUBLE: the chance a stop runs long (no parking, hard to find the
+#   sign, a wrong turn), by STOP_TROUBLE_MINUTES on average; a guess
+# - GAS_SPREAD: a gas stop's time, as for a leg
+SIM_DAYS = 2000
+LEG_SPREAD = 0.3
+DAY_SPREAD = 0.07
+STOP_TROUBLE = 0.1
+STOP_TROUBLE_MINUTES = 10
+GAS_SPREAD = 0.3
 # Bonuses this close together (in miles) are one stop's walk apart: no leg time
 SAME_PLACE_MILES = 0.05
 # Reach a bonus with hours at least this many minutes before it closes
@@ -120,6 +143,31 @@ def add_slow_zone_args(parser):
     parser.add_argument('--athens-slow-zone', action='store_true',
                         help='add a slow zone for downtown Athens: '
                              f"{','.join(f'{v:g}' for v in ATHENS_SLOW_ZONE.values())}")
+
+
+def parse_avoid(text):
+    """'LAT,LON,RADIUS_MILES' -> dict, for argparse."""
+    try:
+        lat, lon, radius = (float(v) for v in text.split(','))
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected LAT,LON,RADIUS_MILES, got '{text}'")
+    return dict(lat=lat, lon=lon, radius=radius)
+
+
+def add_avoid_args(parser):
+    parser.add_argument('--avoid', type=parse_avoid, action='append', default=[], metavar='LAT,LON,RADIUS_MILES',
+                        help='leave out every bonus inside this circle; repeat for more')
+    parser.add_argument('--avoid-savannah', action='store_true',
+                        help='leave out the bonuses in Savannah: '
+                             f"{','.join(f'{v:g}' for v in SAVANNAH_AVOID.values())}")
+    parser.add_argument('--avoid-augusta', action='store_true',
+                        help='leave out the bonuses in Augusta: '
+                             f"{','.join(f'{v:g}' for v in AUGUSTA_AVOID.values())}")
+
+
+def avoid_zones(args):
+    return (list(args.avoid) + ([SAVANNAH_AVOID] if args.avoid_savannah else [])
+            + ([AUGUSTA_AVOID] if args.avoid_augusta else []))
 
 
 def add_gas_args(parser):
@@ -246,10 +294,14 @@ def add_leg_args(parser):
 
 def timing_options(args):
     """Planner's leg_minutes and window_margin from the command line."""
-    return dict(leg_minutes=args.leg_minutes, window_margin=0 if args.ignore_hours else args.window_margin)
+    return dict(leg_minutes=args.leg_minutes, window_margin=0 if args.ignore_hours else args.window_margin,
+                deadline=args.deadline)
 
 
 def add_hours_args(parser):
+    parser.add_argument('--deadline', type=float, metavar='HOURS',
+                        help='hours after the start you must be back by, for the confidence; plan for fewer --hours '
+                             'to keep a reserve (default --hours)')
     parser.add_argument('--start', default=RALLY_START, type=start_time,
                         help=f'rally start time, HH:MM, for the hours bonuses are open (default {RALLY_START})')
     parser.add_argument('--window-margin', type=float, default=WINDOW_MARGIN, metavar='MINUTES',
@@ -261,14 +313,19 @@ def add_hours_args(parser):
                         help='leave out every bonus with opening hours, planning only the ones open all day')
 
 
-def without_timed(bonuses, args):
-    """The bonuses, less those with opening hours if --skip-timed."""
-    if not args.skip_timed:
-        return bonuses
-    timed = [b['code'] for b in bonuses if b.get('opens') or b.get('closes')]
+def planned_bonuses(bonuses, args):
+    """The bonuses, less those inside an avoided area and, with --skip-timed,
+    those with opening hours."""
+    zones = avoid_zones(args)
+    avoided = [b['code'] for b in bonuses if any(haversine_miles(zone, b) <= zone['radius'] for zone in zones)]
+    if avoided:
+        print(f"Leaving out {len(avoided)} bonuses in avoided areas: {', '.join(avoided)}", file=sys.stderr)
+    timed = [b['code'] for b in bonuses if args.skip_timed and (b.get('opens') or b.get('closes'))
+             and b['code'] not in avoided]
     if timed:
         print(f"Leaving out {len(timed)} bonuses with hours: {', '.join(timed)}", file=sys.stderr)
-    return [b for b in bonuses if not (b.get('opens') or b.get('closes'))]
+    left_out = set(avoided) | set(timed)
+    return [b for b in bonuses if b['code'] not in left_out]
 
 
 def describe_hours(planner):
@@ -320,10 +377,15 @@ class Planner:
     """Stops are indexes into self.places; index 0 is Rally HQ."""
 
     def __init__(self, hq, bonuses, hours, speed, stop_minutes, road_factor, front_load, slow_zones=(),
-                 gas_miles=0, gas_minutes=0, start=RALLY_START, use_hours=True, leg_minutes=0, window_margin=0):
+                 gas_miles=0, gas_minutes=0, start=RALLY_START, use_hours=True, leg_minutes=0, window_margin=0,
+                 deadline=None):
         self.places = [hq] + bonuses
         self.start = start
         self.max_hours = hours
+        # When the rider must be back, in hours after the start; confidence is
+        # measured against it. The route is planned to fit max_hours, which
+        # can be shorter to leave a reserve
+        self.deadline = deadline or hours
         self.stop_hours = stop_minutes / 60
         self.front_load = front_load
         self.gas_miles = gas_miles
@@ -890,6 +952,78 @@ def time_of_day(planner, hours):
     return f"{minutes // 60 % 24}:{minutes % 60:02}"
 
 
+def simulate(planner, route, days=SIM_DAYS, seed=0):
+    """Replay the route on simulated days; returns the share of days that
+    make every bonus with hours before it closes and get back in time
+    ('confidence'), the share back in time ('on_time'), the elapsed hours
+    half the days and 90% of days are back within, and each bonus with
+    hours' share of days it's missed. A missed bonus is skipped and the
+    route goes on. The same route always gives the same numbers."""
+    rng = random.Random(seed)
+    hours, miles, windows = planner.hours, planner.miles, planner.windows
+    gas_miles, gas_hours, stop_hours = planner.gas_miles, planner.gas_hours, planner.stop_hours
+    margin = planner.window_margin / 60
+    stops = [0] + list(route) + [0]
+    # Before the loop: each leg's planned hours, gas stops made on it, and the
+    # stop's hours (opens, real closing time) if it has them
+    legs = []
+    distance = 0
+    for a, b in zip(stops, stops[1:]):
+        gas = int((distance + miles[a][b]) // gas_miles) - int(distance // gas_miles) if gas_miles else 0
+        distance += miles[a][b]
+        window = windows[b] if windows and b else None
+        legs.append((hours[a][b], gas, (window[0], window[1] + margin) if window else None, b))
+    # The mean of a lognormal is exp(sigma^2 / 2), so dividing by it keeps
+    # the average time at the plan's
+    leg_mean, day_mean, gas_mean = (math.exp(s * s / 2) for s in (LEG_SPREAD, DAY_SPREAD, GAS_SPREAD))
+    trouble_rate = 60 / STOP_TROUBLE_MINUTES
+    made, back, finishes = 0, 0, []
+    missed = collections.Counter()
+    for _ in range(days):
+        day = rng.lognormvariate(0, DAY_SPREAD) / day_mean
+        elapsed = 0.0
+        all_made = True
+        for k, (leg, gas, window, b) in enumerate(legs):
+            elapsed += leg * day * rng.lognormvariate(0, LEG_SPREAD) / leg_mean
+            for _ in range(gas):
+                elapsed += gas_hours * rng.lognormvariate(0, GAS_SPREAD) / gas_mean
+            if k == len(legs) - 1:
+                break
+            if window:
+                if elapsed > window[1]:
+                    missed[b] += 1
+                    all_made = False
+                    continue
+                elapsed = max(elapsed, window[0])
+            elapsed += stop_hours
+            if rng.random() < STOP_TROUBLE:
+                elapsed += rng.expovariate(trouble_rate)
+        finishes.append(elapsed)
+        on_time = elapsed <= planner.deadline + 1e-9
+        back += on_time
+        made += on_time and all_made
+    finishes.sort()
+    timed = [b for _, _, window, b in legs[:-1] if window]
+    return dict(days=days, deadline=planner.deadline, confidence=made / days, on_time=back / days,
+                finish_p50=finishes[days // 2], finish_p90=finishes[int(days * 0.9)],
+                missed={planner.places[b]['code']: missed[b] / days for b in timed})
+
+
+def describe_confidence(planner, sim):
+    """e.g. 'Confidence: 52% of 2,000 simulated days make every bonus and get
+    back by 17:00; half are back by 16:58, 90% by 17:31; PROP missed on 9%'."""
+    end = time_of_day(planner, sim['deadline'])
+    reserve = sim['deadline'] - planner.max_hours
+    deadline = f" ({sim['deadline']:g} h deadline, planned for {planner.max_hours:g} h)" if reserve > 1e-9 else ''
+    text = (f"Confidence: {sim['confidence']:.0%} of {sim['days']:,} simulated days make every bonus "
+            f"and get back by {end}{deadline}; half are back by {time_of_day(planner, sim['finish_p50'])}, "
+            f"90% by {time_of_day(planner, sim['finish_p90'])}")
+    risky = sorted(((rate, code) for code, rate in sim['missed'].items() if rate >= 0.01), reverse=True)
+    if risky:
+        text += "; " + ", ".join(f"{code} missed on {rate:.0%}" for rate, code in risky)
+    return text
+
+
 def route_legs(planner, route):
     """Yield a Leg for HQ, each stop, then HQ. arrive is when you get there,
     wait is how long until it opens, hours is when you leave after its
@@ -1033,6 +1167,7 @@ def print_route(planner, route):
     print()
     for line in summary_lines(planner, route, legs):
         print(line)
+    print(describe_confidence(planner, simulate(planner, route)))
 
 
 def main():
@@ -1067,11 +1202,12 @@ def main():
     add_gas_args(parser)
     add_first_args(parser)
     add_hours_args(parser)
+    add_avoid_args(parser)
     add_combo_args(parser)
     args = parser.parse_args()
 
     hq, bonuses = load_bonuses(args.csv_file)
-    bonuses = without_timed(bonuses, args)
+    bonuses = planned_bonuses(bonuses, args)
     slow_zones = slow_zones_from_args(args)
     planner = Planner(hq, bonuses, args.hours, args.speed, args.stop_minutes, args.road_factor, args.front_load,
                       slow_zones, args.gas_miles, args.gas_minutes, args.start, not args.ignore_hours,
