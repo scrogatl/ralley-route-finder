@@ -83,13 +83,14 @@ SWITCHES = [
     ('slow_zone', 'Atlanta slow zone', True, 'inside I-285 plus about 5 miles at 25 MPH'),
     ('athens_zone', 'Athens slow zone', False, 'about 3 miles around downtown Athens and UGA at 20 MPH'),
     ('use_hours', 'Bonus hours', True, "only count bonuses reached while they're open"),
+    ('skip_timed', 'Leave out bonuses with hours', False, 'plan only the bonuses open all day'),
     ('use_combos', 'Combo bonuses', True, 'add combo points for getting every bonus in one'),
     ('only', 'Only the must-visit bonuses', False, 'route just those, in the quickest order, adding nothing else'),
     ('quick', 'Quick mode', False, 'beam search: about 4x faster and as good on the 2026 bonuses, but it may '
                                    'miss a better route; no front-load'),
 ]
-# How the list of runs describes a switch that's off (the Athens zone, only
-# and quick, off by default, are described when on)
+# How the list of runs describes a switch that's off (the Athens zone,
+# leaving out timed bonuses, only and quick, off by default, are described when on)
 SWITCHED_OFF = {'slow_zone': 'no Atlanta slow zone', 'use_hours': 'bonus hours ignored', 'use_combos': 'no combos'}
 DEFAULTS = {name: default for name, _, default, *_ in NUMBERS} | {name: on for name, _, on, _ in SWITCHES} | {
     'must': '', 'start': planRoute.RALLY_START}
@@ -226,7 +227,7 @@ def describe(settings):
     # Runs from before these settings had neither
     if settings.get('leg_minutes'):
         parts.append(f"{settings['leg_minutes']:g} min legs")
-    if settings.get('window_margin') and settings['use_hours']:
+    if settings.get('window_margin') and settings['use_hours'] and not settings.get('skip_timed'):
         parts.append(f"hours margin {settings['window_margin']:g} min")
     if settings['front_load']:
         parts.append(f"front-load {settings['front_load']:g}")
@@ -240,7 +241,10 @@ def describe(settings):
         parts.append(f"first {settings['first']}")
     if settings.get('must'):
         parts.append(f"must visit {settings['must'].replace(',', ', ')}")
-    parts += [text for name, text in SWITCHED_OFF.items() if not settings[name]]
+    parts += [text for name, text in SWITCHED_OFF.items() if not settings[name]
+              and not (name == 'use_hours' and settings.get('skip_timed'))]
+    if settings.get('skip_timed'):
+        parts.append('bonuses with hours left out')
     if settings.get('athens_zone'):
         parts.append('Athens slow zone')
     if settings.get('only'):
@@ -253,6 +257,7 @@ def describe(settings):
 def planner_args(settings):
     """The command-line arguments planRoute's helpers read, from a run's settings."""
     return argparse.Namespace(first=settings.get('first'), must=settings.get('must'), only=settings.get('only'),
+                              skip_timed=settings.get('skip_timed', False),
                               gas_miles=settings['gas_miles'], gas_minutes=settings['gas_minutes'],
                               combos=COMBOS_CSV, ignore_combos=not settings['use_combos'])
 
@@ -262,6 +267,7 @@ def make_planner(settings, args):
     returns (planner, bonuses, slow zones). Exits (SystemExit) on bad input,
     e.g. an unknown must-visit code."""
     hq, bonuses = planRoute.load_bonuses(BONUS_CSV)
+    bonuses = planRoute.without_timed(bonuses, args)
     slow_zones = (([planRoute.ATLANTA_SLOW_ZONE] if settings['slow_zone'] else [])
                   + ([planRoute.ATHENS_SLOW_ZONE] if settings.get('athens_zone') else []))
     planner = planRoute.Planner(hq, bonuses, settings['hours'], settings['speed'], settings['stop_minutes'],

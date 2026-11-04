@@ -232,7 +232,9 @@ rally start (`--start`, 7:00 by default, as in the 2026 rally book). The
 table shows each bonus's hours and any wait, e.g. `waits 12 min to open at
 11:00`. `--ignore-hours` plans as if every bonus were open all day, to see
 what the hours cost. With the 2026 defaults, the hours cost 557 points:
-10,546 instead of 11,103.
+10,546 instead of 11,103. `--skip-timed` instead leaves out every bonus with
+hours, planning only the ones open all day, for a day with no waiting and no
+closing times to make. Combos that need a left-out bonus can't be scored.
 
 **Combos.** If `bonus-combos.csv` exists (step 1), a route that visits every
 bonus in a combo also scores the combo's points. The table notes the stop that
@@ -303,6 +305,7 @@ PyPy.
 | `--start` | 07:00 | Rally start time, for the hours bonuses are open |
 | `--window-margin` | 10 | Reach a bonus with hours at least this many minutes before it closes |
 | `--ignore-hours` | | Plan as if every bonus is open all day |
+| `--skip-timed` | | Leave out every bonus with opening hours |
 | `--combos` | bonus-combos.csv | Combo bonuses from the rally book, used if the file exists |
 | `--ignore-combos` | | Plan without the combo bonuses |
 | `--workers` | all cores | How many CPU cores to search with |

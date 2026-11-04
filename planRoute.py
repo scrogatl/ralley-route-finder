@@ -207,7 +207,8 @@ def apply_combos(planner, args):
     for code, points, members in load_combos(args.combos):
         unknown = [m for m in members if m not in index]
         if unknown:
-            print(f"WARNING: combo {code} needs {', '.join(unknown)}, not in the bonus file; it can't be scored",
+            print(f"WARNING: combo {code} needs {', '.join(unknown)}, not among the bonuses planned; "
+                  "it can't be scored",
                   file=sys.stderr)
             continue
         planner.combos.append((code, points, frozenset(index[m] for m in members)))
@@ -256,6 +257,18 @@ def add_hours_args(parser):
                              f'leg on the day doesn\'t miss it (default {WINDOW_MARGIN})')
     parser.add_argument('--ignore-hours', action='store_true',
                         help="plan as if every bonus is open all day, ignoring the rally book's hours")
+    parser.add_argument('--skip-timed', action='store_true',
+                        help='leave out every bonus with opening hours, planning only the ones open all day')
+
+
+def without_timed(bonuses, args):
+    """The bonuses, less those with opening hours if --skip-timed."""
+    if not args.skip_timed:
+        return bonuses
+    timed = [b['code'] for b in bonuses if b.get('opens') or b.get('closes')]
+    if timed:
+        print(f"Leaving out {len(timed)} bonuses with hours: {', '.join(timed)}", file=sys.stderr)
+    return [b for b in bonuses if not (b.get('opens') or b.get('closes'))]
 
 
 def describe_hours(planner):
@@ -1058,6 +1071,7 @@ def main():
     args = parser.parse_args()
 
     hq, bonuses = load_bonuses(args.csv_file)
+    bonuses = without_timed(bonuses, args)
     slow_zones = slow_zones_from_args(args)
     planner = Planner(hq, bonuses, args.hours, args.speed, args.stop_minutes, args.road_factor, args.front_load,
                       slow_zones, args.gas_miles, args.gas_minutes, args.start, not args.ignore_hours,

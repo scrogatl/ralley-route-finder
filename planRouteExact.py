@@ -277,6 +277,7 @@ def main():
     args = parser.parse_args()
 
     hq, bonuses = planRoute.load_bonuses(args.csv_file)
+    bonuses = planRoute.without_timed(bonuses, args)
     slow_zones = planRoute.slow_zones_from_args(args)
     planner = planRoute.Planner(hq, bonuses, args.hours, args.speed, args.stop_minutes, args.road_factor, 0,
                                                 slow_zones, args.gas_miles, args.gas_minutes, args.start, not args.ignore_hours,
