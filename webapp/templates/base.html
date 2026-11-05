@@ -12,6 +12,11 @@
   <header>
     <a class="brand" href="{{ url_for('index') }}">Rally Route Finder</a>
     <span class="tagline">Plan scenarios on straight-line miles.{% if google_enabled %} Check them on real roads with Google.{% else %} No Google checks.{% endif %}</span>
+    {% if session.get('logged_in') %}
+      <form method="post" action="{{ url_for('logout') }}" class="logout">
+        <button type="submit" class="link">Log out</button>
+      </form>
+    {% endif %}
   </header>
   <main>
     {% block main %}{% endblock %}

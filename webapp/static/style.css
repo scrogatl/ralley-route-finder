@@ -176,3 +176,7 @@ details.multi[open] summary { outline: 2px solid var(--accent); }
 .runs-tools form { margin: 0; }
 table.archives { width: auto; }
 .must-only { margin-top: 6px; }
+/* Log out, at the right of the header; the login page */
+header .logout { margin: 0 0 0 auto; }
+header .logout button { color: var(--accent); }
+.login-card { max-width: 360px; margin: 40px auto; }

@@ -1168,8 +1168,8 @@ exist then, Docker creates it empty and owned by root, and the site says "No
 bonus data on the server yet". To fix that, run `docker compose down`, remove
 the empty `data/`, then do step 2's copy again and start it.
 
-Then open the tunnel's address. The browser asks for a user name and password:
-any user name works, with the password from `.env`.
+Then open the tunnel's address and log in with the password from `.env`. A
+login lasts 30 days in that browser; **Log out**, at the top right, ends it.
 
 - **New bonus data:** run step 1 again here, and copy the two CSVs into
   `data/` on the server as in step 2. No restart needed; runs with the new
@@ -1178,7 +1178,8 @@ any user name works, with the password from `.env`.
   server. If pages still look old, rebuild from scratch with
   `docker compose build --no-cache && docker compose up -d`. Saved runs are kept (in a
   Docker volume), and runs that were waiting start again.
-- **Change the password:** edit `.env`, then `docker compose up -d`.
+- **Change the password:** edit `.env`, then `docker compose up -d`. That
+  logs everyone out.
 - **Logs:** `docker compose logs -f app`.
 - **Stop or delete a run:** a waiting or running scenario's page has a
   **Stop this run** button; a running one stops within a second or so. Any

@@ -10,7 +10,8 @@ GOOGLE_CHECK on, a finished route can be checked on real roads with the
 Google Maps Routes API, as checkRoute.py does.
 
 Environment:
-    APP_PASSWORD     required; the password for the whole site (any user name)
+    APP_PASSWORD     required; the password for the whole site, asked for on a
+                     login page; changing it logs everyone out
     DATA_DIR         folder with bonus-lat-lon-points.csv and bonus-combos.csv
                      from extractDatafromGPX.py (default: the repo folder)
     RESULTS_DIR      where runs are saved (default: DATA_DIR/web-scenarios)
@@ -28,7 +29,7 @@ Environment:
     APP_PASSWORD=secret flask --app webapp/app.py run    # to try it locally
 """
 import argparse, glob, hashlib, hmac, json, math, os, queue, re, shutil, sys, threading, time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 # New Relic, only with a license key. It starts before Flask is imported, so
@@ -41,7 +42,7 @@ if NEW_RELIC:
     import newrelic.agent
     newrelic.agent.initialize()
 
-from flask import Flask, Response, abort, redirect, render_template, request, send_file, url_for
+from flask import Flask, Response, abort, redirect, render_template, request, send_file, session, url_for
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 import planRoute, planRouteSearch
@@ -119,6 +120,14 @@ DEFAULTS = {name: default for name, _, default, *_ in NUMBERS} | {name: on for n
     'late_penalty': ','.join(f'{m:g}:{p:g}' for m, p in planRoute.LATE_PENALTY)}
 
 app = Flask(__name__)
+# Logins are a signed session cookie. The key comes from the password, so
+# changing the password logs everyone out, and the cookie's name does too,
+# so your site and the guest site on another port of the same machine
+# (which share cookies) don't log each other out
+_site_key = hmac.new(PASSWORD.encode(), b'rally-route-finder session', hashlib.sha256)
+app.secret_key = _site_key.digest()
+app.config.update(SESSION_COOKIE_NAME='rally_' + _site_key.hexdigest()[:10],
+                  SESSION_COOKIE_SAMESITE='Lax', PERMANENT_SESSION_LIFETIME=timedelta(days=30))
 
 
 @app.context_processor
@@ -151,12 +160,41 @@ class Stopped(Exception):
 
 @app.before_request
 def check_password():
-    # Uptime monitors check /health without the password; it tells them nothing else
-    if request.path == '/health':
+    # Uptime monitors check /health without the password; it tells them
+    # nothing else. The login page and its stylesheet are open too
+    if request.path == '/health' or request.endpoint in ('login', 'static') or session.get('logged_in'):
         return None
-    auth = request.authorization
-    if not auth or not hmac.compare_digest((auth.password or '').encode(), PASSWORD.encode()):
-        return Response('Password required', 401, {'WWW-Authenticate': 'Basic realm="Rally route finder"'})
+    if request.method == 'GET':
+        return redirect(url_for('login', next=request.full_path.rstrip('?')))
+    return Response('Log in first', 401)
+
+
+def safe_next(target):
+    """Where to go after logging in: a page on this site, never elsewhere."""
+    if target and target.startswith('/') and not target.startswith('//') and '\\' not in target:
+        return target
+    return url_for('index')
+
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    error = None
+    if request.method == 'POST':
+        if hmac.compare_digest(request.form.get('password', '').encode(), PASSWORD.encode()):
+            session.clear()
+            session.permanent = True
+            session['logged_in'] = True
+            return redirect(safe_next(request.form.get('next')))
+        # Slows down guessing
+        time.sleep(1)
+        error = "That's not the password"
+    return render_template('login.html', error=error, next=request.values.get('next', '')), 401 if error else 200
+
+
+@app.post('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('login'))
 
 
 def result_path(run_id, extension='json'):
