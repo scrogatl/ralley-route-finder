@@ -34,6 +34,10 @@ from datetime import datetime
 
 EARTH_RADIUS_MILES = 3958.8
 GPX_NS = "http://www.topografix.com/GPX/1/1"
+# Garmin's GPX extensions, as BaseCamp writes them, so a GPS imports the
+# route as a trip: each stop a via point, in order, routed for a motorcycle
+GPXX_NS = "http://www.garmin.com/xmlschemas/GpxExtensions/v3"
+TRP_NS = "http://www.garmin.com/xmlschemas/TripExtensions/v1"
 
 # Slow zones: the part of any leg inside the circle goes at mph, and each
 # bonus inside it takes stop_minutes more than the usual stop, for parking
@@ -378,6 +382,15 @@ def describe_first(planner):
     return "; ".join(parts) or "no forced stops"
 
 
+def parking_hours(a, b, zones):
+    """Extra hours to park at bonus b, reached from a: each slow zone b is
+    in adds its stop_minutes, unless b is within WALK_MILES of a (walk
+    there from where you parked)."""
+    if not zones or haversine_miles(a, b) <= WALK_MILES:
+        return 0
+    return sum(zone.get('stop_minutes', 0) for zone in zones if haversine_miles(zone, b) <= zone['radius']) / 60
+
+
 def describe_slow_zones(zones):
     if not zones:
         return "no slow zones"
@@ -432,13 +445,11 @@ class Planner:
         self.window_margin = window_margin
         # A slow zone's extra stop time (parking) goes on each leg into one
         # of its bonuses, so it counts once a stop, before the photo; a
-        # bonus within WALK_MILES of the last stop shares its parking
-        parking = [0] + [sum(zone.get('stop_minutes', 0) for zone in slow_zones
-                             if haversine_miles(zone, place) <= zone['radius']) / 60
-                         for place in bonuses]
+        # bonus within WALK_MILES of the last stop shares its parking. None
+        # back at Rally HQ (j = 0)
         self.hours = [[self.leg_hours(self.places[i], self.places[j], self.miles[i][j], speed, slow_zones)
                        + (leg_minutes / 60 if self.miles[i][j] > SAME_PLACE_MILES * road_factor else 0)
-                       + (parking[j] if self.miles[i][j] > WALK_MILES * road_factor else 0)
+                       + (parking_hours(self.places[i], self.places[j], slow_zones) if j else 0)
                        for j in range(n)] for i in range(n)]
         # Cached for insert_greedily's inner loop: hours_to[j][i] is hours[i][j]
         self.hours_to = [list(column) for column in zip(*self.hours)]
@@ -1186,10 +1197,40 @@ def stamped_gpx_name(prefix, points):
     return f"{prefix}-{datetime.now():%Y%m%d-%H%M%S}-{points}pts.gpx"
 
 
+def register_gpx_namespaces():
+    ET.register_namespace('', GPX_NS)
+    ET.register_namespace('gpxx', GPXX_NS)
+    ET.register_namespace('trp', TRP_NS)
+
+
+def garmin_trip(rte):
+    """Mark a GPX route as a Garmin trip routed for a motorcycle. Goes after
+    the route's name and desc, before its points."""
+    extensions = ET.SubElement(rte, f'{{{GPX_NS}}}extensions')
+    route = ET.SubElement(extensions, f'{{{GPXX_NS}}}RouteExtension')
+    ET.SubElement(route, f'{{{GPXX_NS}}}IsAutoNamed').text = 'false'
+    ET.SubElement(route, f'{{{GPXX_NS}}}DisplayColor').text = 'Magenta'
+    trip = ET.SubElement(extensions, f'{{{TRP_NS}}}Trip')
+    ET.SubElement(trip, f'{{{TRP_NS}}}TransportationMode').text = 'Motorcycling'
+
+
+def garmin_via_point(rtept):
+    """Mark a route point as a Garmin via point: a stop the GPS announces and
+    routes to in order, working out its own roads from the one before."""
+    extensions = ET.SubElement(rtept, f'{{{GPX_NS}}}extensions')
+    via = ET.SubElement(extensions, f'{{{TRP_NS}}}ViaPoint')
+    ET.SubElement(via, f'{{{TRP_NS}}}CalculationMode').text = 'FasterTime'
+    ET.SubElement(via, f'{{{TRP_NS}}}ElevationMode').text = 'Standard'
+    # No road shape stored: the GPS calculates the leg itself
+    point = ET.SubElement(extensions, f'{{{GPXX_NS}}}RoutePointExtension')
+    ET.SubElement(point, f'{{{GPXX_NS}}}Subclass').text = '000000000000FFFFFFFFFFFFFFFFFFFFFFFF'
+
+
 def write_gpx(planner, route, gpx_file_path):
     """Write the stops as waypoints plus a route through them in order, for
-    Garmin BaseCamp and GPS units. Each stop's comment holds its points."""
-    ET.register_namespace('', GPX_NS)
+    Garmin BaseCamp and GPS units, which import the route as a trip. Each
+    stop's comment holds its points."""
+    register_gpx_namespaces()
     gpx = ET.Element(f'{{{GPX_NS}}}gpx', version='1.1', creator='planRoute.py')
 
     def add_point(parent, tag, leg, n):
@@ -1221,8 +1262,10 @@ def write_gpx(planner, route, gpx_file_path):
         f"{len(route)} bonuses, {last.miles:.0f} estimated miles, "
         f"{planner.gas_stops(last.miles)} gas stop{'' if planner.gas_stops(last.miles) == 1 else 's'}, "
         f"{last.hours:.2f} of {planner.max_hours} hours")
+    garmin_trip(rte)
     for n, leg in enumerate(legs):
         add_point(rte, 'rtept', leg, n)
+        garmin_via_point(rte[-1])
 
     ET.indent(gpx)
     ET.ElementTree(gpx).write(gpx_file_path, encoding='utf-8', xml_declaration=True)

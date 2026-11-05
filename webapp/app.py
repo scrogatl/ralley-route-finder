@@ -348,13 +348,18 @@ def planner_args(settings):
                               combos=COMBOS_CSV, ignore_combos=not settings['use_combos'])
 
 
+def run_slow_zones(settings):
+    """The slow zones a run's settings picked."""
+    return [zone for name, *_, zone in SLOW_ZONES if settings.get(name)]
+
+
 def make_planner(settings, args):
     """A Planner for a run's settings, with its must-visit stops and combos;
     returns (planner, bonuses, slow zones). Exits (SystemExit) on bad input,
     e.g. an unknown must-visit code."""
     hq, bonuses = planRoute.load_bonuses(BONUS_CSV)
     bonuses = planRoute.planned_bonuses(bonuses, args)
-    slow_zones = [zone for name, *_, zone in SLOW_ZONES if settings.get(name)]
+    slow_zones = run_slow_zones(settings)
     planner = planRoute.Planner(hq, bonuses, settings['hours'], settings['speed'], settings['stop_minutes'],
                                 settings['road_factor'], settings['front_load'], slow_zones,
                                 settings['gas_miles'], settings['gas_minutes'], settings['start'],
@@ -637,9 +642,10 @@ def google_check(run, depart, check_id, faster=None):
     windows = checkRoute.bonus_windows(BONUS_CSV, start) if settings['use_hours'] else {}
     combos = planRoute.load_combos(COMBOS_CSV) if settings['use_combos'] else []
     stop_hours, gas_hours = settings['stop_minutes'] / 60, settings['gas_minutes'] / 60
+    zones = run_slow_zones(settings)
     if depart:
         legs, polylines = checkRoute.fetch_with_traffic(GMAPS_API_KEY, places, depart, stop_hours,
-                                                        settings['gas_miles'], gas_hours, windows, faster)
+                                                        settings['gas_miles'], gas_hours, windows, faster, zones)
         source = f"with traffic, leaving {depart:%a %b} {depart.day} {depart:%H:%M}"
         requests_made = len(places) - 1
     else:
@@ -648,7 +654,8 @@ def google_check(run, depart, check_id, faster=None):
         requests_made = math.ceil((len(places) - 1) / (checkRoute.MAX_WAYPOINTS + 1))
     if faster:
         source += f", {checkRoute.describe_faster(faster)}"
-    rows = list(checkRoute.timeline(places, legs, stop_hours, settings['gas_miles'], gas_hours, windows, combos))
+    rows = list(checkRoute.timeline(places, legs, stop_hours, settings['gas_miles'], gas_hours, windows, combos,
+                                    zones))
     begin = planRoute.clock_hours(start)
 
     def time_of_day(hours):
@@ -691,13 +698,14 @@ def fit_check(run, check):
     windows = checkRoute.bonus_windows(BONUS_CSV, start) if settings['use_hours'] else {}
     combos = planRoute.load_combos(COMBOS_CSV) if settings['use_combos'] else []
     stop_hours, gas_hours = settings['stop_minutes'] / 60, settings['gas_minutes'] / 60
+    zones = run_slow_zones(settings)
     fitted = checkRoute.fit_to_time(places, legs, stop_hours, settings['gas_miles'], gas_hours, windows, combos,
-                                    settings['hours'], settings.get('leg_minutes', planRoute.LEG_MINUTES))
+                                    settings['hours'], settings.get('leg_minutes', planRoute.LEG_MINUTES), zones)
     if not fitted:
         return None
     fit_places, fit_legs = fitted
     last = list(checkRoute.timeline(fit_places, fit_legs, stop_hours, settings['gas_miles'], gas_hours,
-                                    windows, combos))[-1]
+                                    windows, combos, zones))[-1]
     kept = {p['code'] for p in fit_places}
     return dict(points=last.score, hours=round(last.arrive, 2), miles=round(last.miles),
                 codes=[p['code'] for p in fit_places[1:-1]],

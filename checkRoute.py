@@ -187,9 +187,10 @@ def fetch_batched(api_key, places, faster=None):
     return legs, polylines
 
 
-def fetch_with_traffic(api_key, places, depart, stop_hours, gas_miles, gas_hours, windows, faster=None):
+def fetch_with_traffic(api_key, places, depart, stop_hours, gas_miles, gas_hours, windows, faster=None, zones=()):
     """One request per leg, leaving when you'd leave that stop, so each leg
-    gets the traffic forecast for its time of day."""
+    gets the traffic forecast for its time of day. zones are the plan's slow
+    zones, for their parking time, as timeline() counts it."""
     legs, polylines = [], []
     elapsed = miles = 0
     for n, (a, b) in enumerate(zip(places, places[1:])):
@@ -201,6 +202,8 @@ def fetch_with_traffic(api_key, places, depart, stop_hours, gas_miles, gas_hours
         gas = gas_stops(miles + leg_miles, gas_miles) - gas_stops(miles, gas_miles)
         miles += leg_miles
         elapsed += leg_hours + gas * gas_hours
+        if n < len(places) - 2:
+            elapsed += planRoute.parking_hours(a, b, zones)
         # Wait for it to open, as timeline() does
         window = windows.get(b['code'])
         if window and elapsed < window[0]:
@@ -214,7 +217,9 @@ def gas_stops(miles, gas_miles):
     return int(miles // gas_miles) if gas_miles else 0
 
 
-Row = collections.namedtuple('Row', 'place leg_miles miles leg_hours arrive wait leave score gas missed combos')
+# parking is a slow zone's extra stop time there, in hours, before the picture
+Row = collections.namedtuple('Row', 'place leg_miles miles leg_hours arrive wait leave score gas missed combos parking',
+                             defaults=[0])
 
 
 def bonus_windows(csv_file_path, start):
@@ -230,18 +235,22 @@ def bonus_windows(csv_file_path, start):
             for b in bonuses if b.get('opens')}
 
 
-def timeline(places, legs, stop_hours, gas_miles, gas_hours, windows, combos=()):
+def timeline(places, legs, stop_hours, gas_miles, gas_hours, windows, combos=(), zones=()):
     """Yield a Row for HQ, each stop, then HQ. A bonus reached before it opens
     is waited for; one reached after it closes is missed and scores nothing.
     combos is [(code, points, member codes)]; each Row's combos are the
-    (code, points) that stop completes."""
+    (code, points) that stop completes. zones are the plan's slow zones: a
+    bonus in one takes its parking time before the picture, as the planner
+    counts it (none within planRoute.WALK_MILES of the stop before)."""
     miles = hours = score = 0
     scored = set()
     yield Row(places[0], 0, 0, 0, 0, 0, 0, 0, 0, False, [])
     for n, (place, (leg_miles, leg_hours)) in enumerate(zip(places[1:], legs), 1):
         gas = gas_stops(miles + leg_miles, gas_miles) - gas_stops(miles, gas_miles)
         miles += leg_miles
-        hours += leg_hours + gas * gas_hours
+        # No parking back at Rally HQ
+        parking = planRoute.parking_hours(places[n - 1], place, zones) if n < len(places) - 1 else 0
+        hours += leg_hours + gas * gas_hours + parking
         arrive = hours
         window = windows.get(place['code'])
         wait = max(0.0, window[0] - arrive) if window else 0.0
@@ -257,7 +266,7 @@ def timeline(places, legs, stop_hours, gas_miles, gas_hours, windows, combos=())
             completed = [(code, points) for code, points, members in combos
                          if place['code'] in members and scored.issuperset(members)]
             score += sum(points for _, points in completed)
-        yield Row(place, leg_miles, miles, leg_hours, arrive, wait, hours, score, gas, missed, completed)
+        yield Row(place, leg_miles, miles, leg_hours, arrive, wait, hours, score, gas, missed, completed, parking)
 
 
 def row_notes(row, windows):
@@ -265,6 +274,8 @@ def row_notes(row, windows):
     notes = []
     if row.gas:
         notes.append(f"+ {row.gas} gas stop{'s' if row.gas > 1 else ''} on the way")
+    if row.parking:
+        notes.append(f"+ {row.parking * 60:.0f} min parking")
     window = windows.get(row.place['code'])
     if row.missed:
         notes.append(f"MISSED: closes {window[3]}")
@@ -320,7 +331,7 @@ FIT_BEAM = 60
 
 
 def fit_to_time(places, legs, stop_hours, gas_miles, gas_hours, windows, combos, max_hours,
-                leg_minutes=planRoute.LEG_MINUTES):
+                leg_minutes=planRoute.LEG_MINUTES, parking_zones=()):
     """Find stops to drop so the route fits max_hours on Google's times and
     makes its bonuses' hours, keeping the most points. Returns (places, legs)
     for the fitted route, or None if dropping stops doesn't score more.
@@ -356,7 +367,7 @@ def fit_to_time(places, legs, stop_hours, gas_miles, gas_hours, windows, combos,
         stops = (0,) + keep + (len(places) - 1,)
         route_legs = [leg(i, j) for i, j in zip(stops, stops[1:])]
         last = list(timeline([places[k] for k in stops], route_legs, stop_hours, gas_miles, gas_hours,
-                             windows, combos))[-1]
+                             windows, combos, parking_zones))[-1]
         return last.score, last.arrive, route_legs
 
     full = tuple(range(1, len(places) - 1))
@@ -392,7 +403,7 @@ def fit_to_time(places, legs, stop_hours, gas_miles, gas_hours, windows, combos,
 def write_gpx(rows, polylines, max_hours, source, gpx_file_path):
     """The stops as waypoints and a route, as planRoute.py writes them but with
     Google's times, plus a track along the roads Google chose."""
-    ET.register_namespace('', GPX_NS)
+    planRoute.register_gpx_namespaces()
     gpx = ET.Element(f'{{{GPX_NS}}}gpx', version='1.1', creator='checkRoute.py')
     stops = len(rows) - 2
 
@@ -422,8 +433,10 @@ def write_gpx(rows, polylines, max_hours, source, gpx_file_path):
     rte = ET.SubElement(gpx, f'{{{GPX_NS}}}rte')
     ET.SubElement(rte, f'{{{GPX_NS}}}name').text = f"Rally route {last.score} points"
     ET.SubElement(rte, f'{{{GPX_NS}}}desc').text = summary
+    planRoute.garmin_trip(rte)
     for n, row in enumerate(rows):
         add_point(rte, 'rtept', row, n)
+        planRoute.garmin_via_point(rte[-1])
     # A fitted route has no Google roads yet, so no track
     if polylines:
         trk = ET.SubElement(gpx, f'{{{GPX_NS}}}trk')
@@ -464,6 +477,9 @@ def main():
                              '(default 0)')
     parser.add_argument('--surface-faster', type=float, default=0, metavar='PERCENT',
                         help='the same for every other road (default 0)')
+    # The plan's slow zones, as planRoute.py takes them, for their parking
+    # time at each bonus (Google's times are driving only)
+    planRoute.add_slow_zone_args(parser)
     parser.add_argument('--leg-minutes', type=float, default=planRoute.LEG_MINUTES,
                         help='the planner\'s minutes per leg: for the --speed it suggests, and to estimate legs '
                              f'that skip a dropped stop (default {planRoute.LEG_MINUTES})')
@@ -475,6 +491,7 @@ def main():
     args.gpx_file = args.gpx_file or newest_route()
     places = load_route(args.gpx_file)
     stop_hours, gas_hours = args.stop_minutes / 60, args.gas_minutes / 60
+    zones = planRoute.slow_zones_from_args(args)
     start = f"{args.depart:%H:%M}" if args.depart else args.start
     windows = bonus_windows(args.bonuses, start)
     if args.depart and args.depart.timestamp() < datetime.now().timestamp():
@@ -483,7 +500,7 @@ def main():
     api_key = os.environ.get('GMAPS_API_KEY') or sys.exit("ERROR: set GMAPS_API_KEY to your Google Maps API key")
     if args.depart:
         legs, polylines = fetch_with_traffic(api_key, places, args.depart, stop_hours, args.gas_miles, gas_hours,
-                                             windows, faster)
+                                             windows, faster, zones)
         source = f"Google, with traffic, leaving {args.depart:%a %b %d %H:%M}"
     else:
         legs, polylines = fetch_batched(api_key, places, faster)
@@ -491,7 +508,7 @@ def main():
     if faster:
         source += f", {describe_faster(faster)}"
     combos = planRoute.load_combos(args.combos)
-    rows = list(timeline(places, legs, stop_hours, args.gas_miles, gas_hours, windows, combos))
+    rows = list(timeline(places, legs, stop_hours, args.gas_miles, gas_hours, windows, combos, zones))
     begin = planRoute.clock_hours(start)
 
     def time_of_day(hours):
@@ -521,10 +538,11 @@ def main():
     print(f"\nGPX written to {gpx}")
 
     fitted = fit_to_time(places, legs, stop_hours, args.gas_miles, gas_hours, windows, combos, args.hours,
-                         args.leg_minutes)
+                         args.leg_minutes, zones)
     if fitted:
         fit_places, fit_legs = fitted
-        fit_rows = list(timeline(fit_places, fit_legs, stop_hours, args.gas_miles, gas_hours, windows, combos))
+        fit_rows = list(timeline(fit_places, fit_legs, stop_hours, args.gas_miles, gas_hours, windows, combos,
+                                 zones))
         last = fit_rows[-1]
         kept = {p['code'] for p in fit_places}
         dropped = [p for p in places[1:-1] if p['code'] not in kept]

@@ -279,6 +279,26 @@ stop and a route through them in order, from Rally HQ back to Rally HQ. Each
 point's comment holds its point value, and its description gives the stop
 number, state and planned time.
 
+The route carries Garmin's trip extensions, as BaseCamp writes them, so a
+Garmin GPS (e.g. a zūmo 396) imports it as a **trip**: each stop is a via
+point, kept in order and announced on arrival, and the trip is routed for a
+motorcycle. The GPS works out its own roads between stops, with its own
+map and route settings (avoid highways and so on), so its times and miles
+differ from the plan's estimates, but the order stays the plan's. To load
+it:
+
+- **USB:** connect the GPS, copy the GPX file into its `GPX` folder, and
+  disconnect it. Open **Trip Planner**; the unit offers to import the file,
+  and the route then appears there as a trip.
+- **BaseCamp:** import the file, then send the route to the device.
+- **The web app:** a scenario's **Download GPX** link gives the same file,
+  as does a Google check's GPX (which adds Google's roads as a track for
+  the map).
+
+The waypoints come along too, as saved locations with their points in the
+comment. Reloading a newer route adds another trip; delete old ones in
+Trip Planner so you don't ride the wrong one.
+
 ```bash
 python planRoute.py                       # reads bonus-lat-lon-points.csv
 python planRoute.py --hours 8 --speed 50  # different time budget and speed
@@ -567,8 +587,10 @@ going past isn't slowed, which is why ASCC, 8 miles out, isn't in
 Savannah's zone. To be sure the planner stays out of a city, give its zone
 a big stop time, e.g. `--slow-zone 32.081,-81.091,5,20,30`. The zones are
 `ATLANTA_SLOW_ZONE` and the others at the top of `planRoute.py`. The
-Google check uses Google's own leg times and the usual stop time, so it
-doesn't add a zone's parking minutes.
+Google check uses Google's own leg times, with the usual stop time and the
+same parking minutes at bonuses in the run's slow zones (`checkRoute.py`
+takes the same slow zone options as `planRoute.py` for that), so the two
+count stops alike; the check's table notes each "+ 5 min parking".
 
 `--athens-slow-zone` (Athens in the web app's Slow zones dropdown) adds 3 miles
 around downtown Athens and UGA at 20 MPH. It's off by default because the
@@ -887,6 +909,7 @@ for current numbers.
 | `--combos` | bonus-combos.csv | Combo bonuses, scored when every bonus in one is made |
 | `--gpx` | route-google-DATE-TIME-POINTSpts.gpx | Where to write the GPX file |
 | `--highway-faster` | 0 | Percent faster than Google on highways; negative for slower (-50 to 100) |
+| `--athens-slow-zone`, `--savannah-slow-zone`, `--augusta-slow-zone`, `--slow-zone` | | The plan's slow zones, as `planRoute.py` takes them, for their parking minutes at each stop |
 | `--surface-faster` | 0 | The same for every other road |
 | `--highway-mph` | 55 | A step Google drives at this speed or more counts as highway |
 | `--leg-minutes` | 3 | The planner's minutes per leg, for the `--speed` it suggests and for estimating legs in a fitted route |
