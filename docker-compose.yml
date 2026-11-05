@@ -9,6 +9,9 @@
 # and, to monitor it with New Relic APM and Browser:
 #   NEW_RELIC_LICENSE_KEY=your-ingest-license-key
 #   NEW_RELIC_APP_NAME=Rally Route Finder
+# and, for a second site to share with others (the guest service below):
+#   COMPOSE_PROFILES=guest
+#   GUEST_PASSWORD=the-guest-site-password
 services:
   app:
     build: .
@@ -21,6 +24,29 @@ services:
     volumes:
       - ./data:/data:ro
       - results:/results
+    restart: unless-stopped
+
+  # A second copy of the app to share with others: its own password and its
+  # own saved runs, so theirs never mix with yours, and no Google checks, so
+  # nobody else spends your key. It reads the same bonus files. Planning uses
+  # at most 4 cores, leaving the rest for your runs. Runs only with the guest
+  # profile (COMPOSE_PROFILES=guest in .env), at http://localhost:8000 on
+  # this machine, for a tunnel (e.g. cloudflared) to serve
+  guest:
+    build: .
+    profiles: [guest]
+    environment:
+      # Empty stops it at start-up with "set APP_PASSWORD"; set GUEST_PASSWORD
+      APP_PASSWORD: ${GUEST_PASSWORD:-}
+      GOOGLE_CHECK: "off"
+      PLANNER_WORKERS: 4
+      NEW_RELIC_LICENSE_KEY: ${NEW_RELIC_LICENSE_KEY:-}
+      NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME:-Rally Route Finder} (guests)
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./data:/data:ro
+      - guest_results:/results
     restart: unless-stopped
 
   caddy:
@@ -39,4 +65,5 @@ services:
 
 volumes:
   results:
+  guest_results:
   caddy_data:

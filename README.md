@@ -1195,6 +1195,21 @@ any user name works, with the password from `.env`.
   again after archiving is already in the list; restoring keeps the list's
   copy and leaves the archived one where it is. Archives are folders in
   `archives/` in the results folder, so a backup of the volume has them.
+- **A guest site to share:** the `guest` service in `docker-compose.yml`
+  is a second copy of the app with its own password and its own saved
+  runs, so other people's scenarios never land in your list (and yours
+  aren't in theirs). It has no Google checks, so nobody else can spend
+  your key, and plans with at most 4 cores, leaving the rest for your runs;
+  it reads the same `data/` bonus files. Turn it on by adding to `.env`:
+
+      COMPOSE_PROFILES=guest
+      GUEST_PASSWORD=the-guest-site-password
+
+  then `docker compose up -d --build`. It listens on
+  `http://localhost:8000`, on the server only, for a tunnel to publish,
+  e.g. a Cloudflare Tunnel with a public hostname pointing at
+  `http://localhost:8000`. A new build updates both sites. Its logs are
+  `docker compose logs -f guest`.
 
 ### Checking routes with Google
 
