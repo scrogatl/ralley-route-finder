@@ -1124,54 +1124,59 @@ It reads the files from step 1, `bonus-lat-lon-points.csv` and
 `bonus-combos.csv`. The bonus data comes from the rally book, so keep the
 password to people the rally allows to see it.
 
-### Running it on a cloud server
+### Running it on a server
 
-`docker-compose.yml` runs the app under PyPy, plus [Caddy](https://caddyserver.com),
-which gets an HTTPS certificate automatically so the password isn't sent in
-the clear.
+`docker-compose.yml` runs the app under PyPy on port 80 of the server, and
+optionally a guest copy on port 8000 (see below). Neither does HTTPS, so
+put a tunnel in front: a [Cloudflare
+Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
+gives each a public HTTPS address with no ports opened on the router, and
+Tailscale works for your own machines. Without one, the password crosses
+the network in the clear.
 
-1. Create a Linux server (Ubuntu 24.04) with 4 vCPUs and 4–8 GB of memory,
-   from any provider (Hetzner, DigitalOcean, Linode, ...). Allow incoming
-   ports 22, 80 and 443. More vCPUs make each run faster.
-2. A domain name for it: either point one you own at the server's IP, or use
-   [sslip.io](https://sslip.io), which needs no setup: for IP 203.0.113.5,
-   use `203-0-113-5.sslip.io`.
-3. Install Docker on the server:
+1. A Linux machine with Docker (`curl -fsSL https://get.docker.com | sh`),
+   e.g. a desktop at home or a cloud server with 4 or more vCPUs and 4–8 GB
+   of memory. More vCPUs make each run faster.
+2. Get the code and copy in the bonus files from this folder:
 
     ```bash
-    ssh root@SERVER 'curl -fsSL https://get.docker.com | sh'
+    git clone https://github.com/scrogatl/rally-route-finder.git
+    mkdir -p rally-route-finder/data
+    scp bonus-lat-lon-points.csv bonus-combos.csv SERVER:rally-route-finder/data/
     ```
 
-4. Copy the code and the bonus files from this folder (the repo has no remote
-   to clone from):
+3. On the server, set the password, then start it:
 
     ```bash
-    rsync -a --exclude .venv --exclude .git --exclude '*.gpx' ./ root@SERVER:/opt/rally-route-finder/
-    ssh root@SERVER 'mkdir -p /opt/rally-route-finder/data'
-    scp bonus-lat-lon-points.csv bonus-combos.csv root@SERVER:/opt/rally-route-finder/data/
-    ```
-
-5. On the server, set the password and domain, then start it:
-
-    ```bash
-    cd /opt/rally-route-finder
-    printf 'APP_PASSWORD=%s\nDOMAIN=%s\n' 'choose-a-password' '203-0-113-5.sslip.io' > .env
+    cd rally-route-finder
+    printf 'APP_PASSWORD=%s\n' 'choose-a-password' > .env
     docker compose up -d --build
     ```
+
+4. Point the tunnel at it: for a Cloudflare Tunnel, add a public hostname
+   with the service `http://localhost:80` (and one with
+   `http://localhost:8000` for the guest site). If `cloudflared` runs in its
+   own Docker container, use `http://host.docker.internal:80` instead.
+
+Docker publishes the ports on every network the server is on, past its
+firewall, so on a cloud server with a public IP block ports 80 and 8000 at
+the provider's firewall, or change `"80:8000"` to `"127.0.0.1:80:8000"` in
+`docker-compose.yml` to serve only the tunnel.
 
 Copy the bonus files before the first `docker compose up`: if `data/` doesn't
 exist then, Docker creates it empty and owned by root, and the site says "No
 bonus data on the server yet". To fix that, run `docker compose down`, remove
-the empty `data/`, then do step 4's copy again and start it.
+the empty `data/`, then do step 2's copy again and start it.
 
-Then open `https://DOMAIN`. The browser asks for a user name and password:
+Then open the tunnel's address. The browser asks for a user name and password:
 any user name works, with the password from `.env`.
 
 - **New bonus data:** run step 1 again here, and copy the two CSVs into
-  `data/` on the server as in step 4. No restart needed; runs with the new
+  `data/` on the server as in step 2. No restart needed; runs with the new
   data are planned fresh, and earlier ones stay listed.
-- **New code:** repeat the `rsync` in step 4, then
-  `docker compose up -d --build` on the server. Saved runs are kept (in a
+- **New code:** `git pull`, then `docker compose up -d --build` on the
+  server. If pages still look old, rebuild from scratch with
+  `docker compose build --no-cache && docker compose up -d`. Saved runs are kept (in a
   Docker volume), and runs that were waiting start again.
 - **Change the password:** edit `.env`, then `docker compose up -d`.
 - **Logs:** `docker compose logs -f app`.
@@ -1205,9 +1210,8 @@ any user name works, with the password from `.env`.
       COMPOSE_PROFILES=guest
       GUEST_PASSWORD=the-guest-site-password
 
-  then `docker compose up -d --build`. It listens on
-  `http://localhost:8000`, on the server only, for a tunnel to publish,
-  e.g. a Cloudflare Tunnel with a public hostname pointing at
+  then `docker compose up -d --build`. It's on port 8000, for a tunnel to
+  publish, e.g. a Cloudflare Tunnel public hostname pointing at
   `http://localhost:8000`. A new build updates both sites. Its logs are
   `docker compose logs -f guest`.
 
@@ -1268,7 +1272,7 @@ While New Relic is on, the app also sends a heartbeat every minute (the
 metrics `Custom/Heartbeat/QueuedRuns` and `Custom/Heartbeat/Running`), so it
 keeps reporting when nobody's using the site.
 
-**Uptime checks.** `https://DOMAIN/health` answers without the password:
+**Uptime checks.** `/health` on the site's address answers without the password:
 `{"status": "ok"}`, or status 503 and `{"status": "planner stopped"}` if the
 thread that runs the planner has died (restart with `docker compose restart
 app`). Point New Relic Synthetics, or any ping monitor, at it rather than at

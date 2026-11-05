@@ -1,7 +1,8 @@
-# The web app plus Caddy, which gets an HTTPS certificate for DOMAIN
-# automatically. Settings go in a .env file next to this one:
+# The web app, and optionally a guest copy of it to share. Neither does
+# HTTPS: put a tunnel in front (e.g. a Cloudflare Tunnel, which serves them
+# over HTTPS with its own certificate). Settings go in a .env file next to
+# this one:
 #   APP_PASSWORD=the-site-password
-#   DOMAIN=routes.example.com   (or 203-0-113-5.sslip.io for server IP 203.0.113.5)
 # and, only on a private site, to check routes on real roads with Google
 # (every check is billed to the key's Google account):
 #   GOOGLE_CHECK=on
@@ -13,6 +14,7 @@
 #   COMPOSE_PROFILES=guest
 #   GUEST_PASSWORD=the-guest-site-password
 services:
+  # Your site, on port 80 of this machine
   app:
     build: .
     environment:
@@ -21,17 +23,18 @@ services:
       GMAPS_API_KEY: ${GMAPS_API_KEY:-}
       NEW_RELIC_LICENSE_KEY: ${NEW_RELIC_LICENSE_KEY:-}
       NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME:-Rally Route Finder}
+    ports:
+      - "80:8000"
     volumes:
       - ./data:/data:ro
       - results:/results
     restart: unless-stopped
 
-  # A second copy of the app to share with others: its own password and its
-  # own saved runs, so theirs never mix with yours, and no Google checks, so
-  # nobody else spends your key. It reads the same bonus files. Planning uses
-  # at most 4 cores, leaving the rest for your runs. Runs only with the guest
-  # profile (COMPOSE_PROFILES=guest in .env), at http://localhost:8000 on
-  # this machine, for a tunnel (e.g. cloudflared) to serve
+  # A second copy of the app to share with others, on port 8000: its own
+  # password and its own saved runs, so theirs never mix with yours, and no
+  # Google checks, so nobody else spends your key. It reads the same bonus
+  # files. Planning uses at most 4 cores, leaving the rest for your runs.
+  # Runs only with the guest profile (COMPOSE_PROFILES=guest in .env)
   guest:
     build: .
     profiles: [guest]
@@ -43,27 +46,12 @@ services:
       NEW_RELIC_LICENSE_KEY: ${NEW_RELIC_LICENSE_KEY:-}
       NEW_RELIC_APP_NAME: ${NEW_RELIC_APP_NAME:-Rally Route Finder} (guests)
     ports:
-      - "127.0.0.1:8000:8000"
+      - "8000:8000"
     volumes:
       - ./data:/data:ro
       - guest_results:/results
     restart: unless-stopped
 
-  caddy:
-    image: caddy:2.8.4
-    ports:
-      - "80:80"
-      - "443:443"
-    environment:
-      DOMAIN: ${DOMAIN:?set DOMAIN in .env}
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-    depends_on:
-      - app
-    restart: unless-stopped
-
 volumes:
   results:
   guest_results:
-  caddy_data:
