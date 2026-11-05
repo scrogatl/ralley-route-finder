@@ -36,9 +36,9 @@
           <label class="field" for="must">
             <span>Must visit</span>
             <input id="must" name="must" value="{{ settings['must'] }}" placeholder="e.g. CGSH,SMCH">
-            <small>bonus codes to include, in whatever order fits best</small>
+            <small>bonus codes to include, in whatever order fits best unless In this order is on</small>
           </label>
-          {% for name, label, on, help in switches if name == 'only' %}
+          {% for name, label, on, help in switches if name in ('in_order', 'only') %}
             <label class="switch must-only">
               <input type="checkbox" name="{{ name }}" {% if settings[name] in (true, 'on') %}checked{% endif %}>
               <span><strong>{{ label }}</strong> <small>{{ help }}</small></span>
@@ -66,7 +66,7 @@
         <small>slower driving in town, and time to park; none by default</small>
       </div>
       <div class="switches">
-        {% for name, label, on, help in switches if name != 'only' %}
+        {% for name, label, on, help in switches if name not in ('in_order', 'only') %}
           <label class="switch">
             <input type="checkbox" name="{{ name }}" {% if settings[name] in (true, 'on') %}checked{% endif %}>
             <span><strong>{{ label }}</strong> <small>{{ help }}</small></span>

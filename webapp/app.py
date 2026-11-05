@@ -103,7 +103,10 @@ SWITCHES = [
     ('best_budget', 'Find the best time budget', False,
      'plan budgets from the deadline down and keep the one with the highest expected score under the late '
      'penalty; the time budget above is ignored; takes a few minutes'),
-    ('only', 'Only the must-visit bonuses', False, 'route just those, in the quickest order, adding nothing else'),
+    ('in_order', 'In this order', False,
+     'visit them first, in the order typed; the planner adds the rest of the day after them'),
+    ('only', 'Only the must-visit bonuses', False,
+     'route just those, adding nothing else; in the quickest order unless In this order is on'),
     ('quick', 'Quick mode', False, 'beam search: about 4x faster and as good on the 2026 bonuses, but it may '
                                    'miss a better route; no front-load'),
 ]
@@ -282,6 +285,11 @@ def read_form(form):
     settings['must'] = ','.join(code.strip().upper() for code in form.get('must', '').split(',') if code.strip())
     if settings['hours'] > settings['deadline'] and not settings['best_budget']:
         raise ValueError("Time budget: must be no more than the deadline")
+    if settings['in_order'] and not settings['must']:
+        raise ValueError("In this order: list the bonuses in Must visit")
+    if not settings['in_order']:
+        # Off is left out, so runs from before the switch keep their IDs
+        del settings['in_order']
     if settings['only'] and not settings['must']:
         raise ValueError("Only the must-visit bonuses: list the bonuses in Must visit")
     if settings['quick'] and settings['front_load']:
@@ -319,7 +327,8 @@ def describe(settings):
         # Runs from before the form asked for must-visit bonuses instead
         parts.append(f"first {settings['first']}")
     if settings.get('must'):
-        parts.append(f"must visit {settings['must'].replace(',', ', ')}")
+        parts.append(f"must visit {settings['must'].replace(',', ', ')}"
+                     + (' in that order' if settings.get('in_order') else ''))
     parts += [text for name, text in SWITCHED_OFF.items() if not settings[name]
               and not (name == 'use_hours' and settings.get('skip_timed'))]
     if settings.get('skip_timed'):
@@ -342,7 +351,12 @@ def describe(settings):
 
 def planner_args(settings):
     """The command-line arguments planRoute's helpers read, from a run's settings."""
-    return argparse.Namespace(first=settings.get('first'), must=settings.get('must'), only=settings.get('only'),
+    if settings.get('in_order'):
+        # Must-visit bonuses in a fixed order are the planner's first stops
+        first, must = settings['must'], None
+    else:
+        first, must = settings.get('first'), settings.get('must')
+    return argparse.Namespace(first=first, must=must, only=settings.get('only'),
                               skip_timed=settings.get('skip_timed', False),
                               gas_miles=settings['gas_miles'], gas_minutes=settings['gas_minutes'],
                               combos=COMBOS_CSV, ignore_combos=not settings['use_combos'])
@@ -404,7 +418,7 @@ def plan(run):
     except SystemExit as stop:
         run.update(status='error', error=str(stop.code).removeprefix('ERROR: ').replace('--must', 'Must visit')
                    .replace('--only', 'Only the must-visit bonuses')
-                   .replace('--first', 'First stops'))
+                   .replace('--first', 'Must visit, in this order' if settings.get('in_order') else 'First stops'))
         save_worker_copy(run)
         return
     except Exception as error:
