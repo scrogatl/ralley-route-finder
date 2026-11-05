@@ -1209,6 +1209,9 @@ login lasts 30 days in that browser; **Log out**, at the top right, ends it.
   other scenario's page has a **Delete this scenario** link, which removes it
   and its files (its GPX and any Google checks). A stopped scenario can be
   run again by submitting the same settings.
+- **Bonus list:** a finished scenario's **Bonus list** button opens a box
+  with the route's bonus codes in order, comma separated (start and finish
+  left out), and a **Copy** button to put them on the clipboard.
 - **Favorites and sorting:** click the star beside a scenario, in the list
   or on its page, to mark it a favorite; click again to unmark it. Favorites
   are saved with the scenario, so everyone using the site sees them. Sort the

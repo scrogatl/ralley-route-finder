@@ -67,7 +67,30 @@
     <p class="actions">
       <a class="button" href="{{ url_for('run_gpx', run_id=run.id) }}">Download GPX</a>
       <a class="button secondary" href="{{ url_for('index', **{'from': run.id}) }}">Try changes to this scenario</a>
+      <button type="button" class="secondary" onclick="document.getElementById('bonus-list').showModal()">Bonus list</button>
     </p>
+    <dialog id="bonus-list" class="bonus-list">
+      <h2>Bonuses in order</h2>
+      <p class="muted">The route's {{ run.legs[1:-1] | length }} stops, start and finish left out.</p>
+      <textarea id="bonus-list-text" readonly rows="5" onfocus="this.select()">{{ run.legs[1:-1] | map(attribute='code') | join(', ') }}</textarea>
+      <form method="dialog" class="actions">
+        <button type="button" onclick="copyBonusList(this)">Copy</button>
+        <button type="submit" class="secondary">Close</button>
+      </form>
+    </dialog>
+    <script>
+      function copyBonusList(button) {
+        const text = document.getElementById('bonus-list-text');
+        text.select();
+        const done = () => { button.textContent = 'Copied'; setTimeout(() => button.textContent = 'Copy', 1500); };
+        // The clipboard API needs HTTPS; plain HTTP (port 80 on the LAN) falls back to execCommand
+        if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text.value).then(done);
+        else if (document.execCommand('copy')) done();
+      }
+      document.getElementById('bonus-list').addEventListener('click', e => {
+        if (e.target === e.currentTarget) e.currentTarget.close();  // a click on the backdrop closes it
+      });
+    </script>
   {% endif %}
   {% if run.status not in ('queued', 'running') %}
     <form method="post" action="{{ url_for('delete_run', run_id=run.id) }}" class="delete"
