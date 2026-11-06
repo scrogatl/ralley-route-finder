@@ -12,6 +12,9 @@ the whole file (it is over 1,000 lines).
   confidence simulation, `--best-budget`, GPX/trip output
 - `planRouteSearch.py`: quick mode (beam search); `planRouteExact.py`: CP-SAT
   exact solver (OR-Tools, CPython only, not in the web app)
+- `buildRoadMiles.py`: road miles between every pair of bonuses from a local
+  GraphHopper (route-camp's, port 8989) -> `bonus-road-miles.csv`, for
+  `--road-miles` and the web app's Road miles switch
 - `checkRoute.py`: checks a route with the Google Maps Routes API (billed)
 - `webapp/`: Flask app (`app.py`, templates, static); runs under PyPy in Docker
 - `docker-compose.yml`: `app` on port 80, optional `guest` site on 8000

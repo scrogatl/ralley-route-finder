@@ -7,6 +7,7 @@ __pycache__/
 /bonus-lat-lon-points.gpx
 /bonus-lat-lon-points-gpxstudio.gpx
 /bonus-combos.csv
+/bonus-road-miles.csv
 route*.gpx
 *.log
 

@@ -4,8 +4,9 @@ Plan a high-scoring rally route from bonus-lat-lon-points.csv without
 calling the Google API.
 
 Distances are straight-line (great circle) miles between bonuses, so they
-are rough: real roads are longer. Use --road-factor to pad them (1.3 is a
-common rule of thumb). The route starts and ends at Rally HQ and must fit
+are rough: real roads are longer. --road-factor pads them (1.23 fits Google's
+road miles on average); --road-miles uses real road miles instead, from a
+table buildRoadMiles.py makes with a local GraphHopper server. The route starts and ends at Rally HQ and must fit
 in the time budget, including 5 minutes (--stop-minutes) at each bonus to
 take its picture, 3 minutes on every leg for getting off the main road and
 parking (--leg-minutes), a 10-minute gas stop every 175 miles (--gas-miles,
@@ -33,6 +34,7 @@ import xml.etree.ElementTree as ET
 from datetime import datetime
 
 EARTH_RADIUS_MILES = 3958.8
+METERS_PER_MILE = 1609.344
 GPX_NS = "http://www.topografix.com/GPX/1/1"
 # Garmin's GPX extensions, as BaseCamp writes them, so a GPS imports the
 # route as a trip: each stop a via point, in order, routed for a motorcycle
@@ -110,6 +112,13 @@ SAME_PLACE_MILES = 0.05
 # A slow zone's bonus within this many straight-line miles of the last stop
 # is a short walk from where you parked, so it takes no more parking time
 WALK_MILES = 0.25
+# The road miles table buildRoadMiles.py writes, next to the bonus file
+# (--road-miles; the web app's Road miles switch)
+ROAD_MILES_CSV = 'bonus-road-miles.csv'
+# Fitted to 73 legs of 2026 Google checks, road miles from GraphHopper with
+# the default speed and leg minutes and the Atlanta zone cut the total leg
+# time error from 265 to about 206 minutes; GraphHopper's own times did worse
+
 # Reach a bonus with hours at least this many minutes before it closes
 # (--window-margin), so a slower leg doesn't miss it
 WINDOW_MARGIN = 10
@@ -300,12 +309,43 @@ def add_leg_args(parser):
     parser.add_argument('--leg-minutes', type=float, default=LEG_MINUTES,
                         help='minutes every leg takes on top of driving, for leaving the main road, finding the '
                              f'bonus and parking; not between bonuses at the same spot (default {LEG_MINUTES})')
+    parser.add_argument('--road-miles', metavar='FILE',
+                        help='road miles between bonuses from this table (made by buildRoadMiles.py, e.g. '
+                             f'{ROAD_MILES_CSV}) instead of straight-line miles x --road-factor; a pair not in it, '
+                             'or a bonus moved since, gets the straight-line estimate')
 
 
 def timing_options(args):
-    """Planner's leg_minutes and window_margin from the command line."""
+    """Planner's leg_minutes, window_margin and road miles from the command line."""
     return dict(leg_minutes=args.leg_minutes, window_margin=0 if args.ignore_hours else args.window_margin,
-                deadline=args.deadline, late_penalty=args.late_penalty)
+                deadline=args.deadline, late_penalty=args.late_penalty,
+                road_miles=load_road_miles(args.road_miles) if args.road_miles else None)
+
+
+def coordinate_key(place):
+    # Rounded so a table written and read back as text still matches
+    return round(place['lat'], 6), round(place['lon'], 6)
+
+
+def load_road_miles(path):
+    """buildRoadMiles.py's table -> {(from (lat, lon), to (lat, lon)): road miles}."""
+    try:
+        with open(path, newline='') as f:
+            return {(coordinate_key(dict(lat=float(row['from_lat']), lon=float(row['from_lon']))),
+                     coordinate_key(dict(lat=float(row['to_lat']), lon=float(row['to_lon'])))): float(row['miles'])
+                    for row in csv.DictReader(f)}
+    except OSError as error:
+        sys.exit(f"ERROR: can't read the road miles table: {error}")
+    except (KeyError, ValueError):
+        sys.exit(f"ERROR: {path} isn't a road miles table from buildRoadMiles.py")
+
+
+def describe_roads(planner, road_factor):
+    """e.g. 'road factor 1.23', or 'road miles from GraphHopper' when a table was used."""
+    if planner.road_miles_missing is None:
+        return f"road factor {road_factor:g}"
+    return "road miles from GraphHopper" + (f" (straight line x {road_factor:g} for {planner.road_miles_missing} "
+                                            "legs not in the table)" if planner.road_miles_missing else "")
 
 
 def parse_late_penalty(text):
@@ -424,7 +464,7 @@ class Planner:
 
     def __init__(self, hq, bonuses, hours, speed, stop_minutes, road_factor, front_load, slow_zones=(),
                  gas_miles=0, gas_minutes=0, start=RALLY_START, use_hours=True, leg_minutes=0, window_margin=0,
-                 deadline=None, late_penalty=None):
+                 deadline=None, late_penalty=None, road_miles=None):
         self.places = [hq] + bonuses
         self.start = start
         self.max_hours = hours
@@ -438,9 +478,28 @@ class Planner:
         self.gas_miles = gas_miles
         self.gas_hours = gas_minutes / 60
         n = len(self.places)
-        # Estimated road miles, and travel time in hours, between every pair of places
-        self.miles = [[haversine_miles(self.places[i], self.places[j]) * road_factor
-                       for j in range(n)] for i in range(n)]
+        # Estimated road miles, and travel time in hours, between every pair of
+        # places: from the road miles table (road_miles, from load_road_miles)
+        # where it has the pair, otherwise straight-line miles x road_factor
+        line = [[haversine_miles(self.places[i], self.places[j]) for j in range(n)] for i in range(n)]
+        self.miles = [[line[i][j] * road_factor for j in range(n)] for i in range(n)]
+        # Legs the table didn't have, or None when there's no table
+        self.road_miles_missing = None
+        if road_miles is not None:
+            self.road_miles_missing = 0
+            keys = [coordinate_key(place) for place in self.places]
+            for i in range(n):
+                for j in range(n):
+                    if line[i][j] <= SAME_PLACE_MILES:
+                        continue
+                    miles = road_miles.get((keys[i], keys[j]))
+                    if miles is None:
+                        self.road_miles_missing += 1
+                    else:
+                        self.miles[i][j] = miles
+            if self.road_miles_missing:
+                print(f"WARNING: {self.road_miles_missing} legs aren't in the road miles table (a bonus added or "
+                      "moved since it was built?); they're straight line x road factor", file=sys.stderr)
         self.leg_minutes = leg_minutes
         self.window_margin = window_margin
         # A slow zone's extra stop time (parking) goes on each leg into one
@@ -448,7 +507,7 @@ class Planner:
         # bonus within WALK_MILES of the last stop shares its parking. None
         # back at Rally HQ (j = 0)
         self.hours = [[self.leg_hours(self.places[i], self.places[j], self.miles[i][j], speed, slow_zones)
-                       + (leg_minutes / 60 if self.miles[i][j] > SAME_PLACE_MILES * road_factor else 0)
+                       + (leg_minutes / 60 if line[i][j] > SAME_PLACE_MILES else 0)
                        + (parking_hours(self.places[i], self.places[j], slow_zones) if j else 0)
                        for j in range(n)] for i in range(n)]
         # Cached for insert_greedily's inner loop: hours_to[j][i] is hours[i][j]
@@ -1396,7 +1455,7 @@ def main():
             print("  " + line)
         print()
     print(f"{len(bonuses)} bonuses, {planner.max_hours:g} hours at {args.speed} MPH, "
-          f"{args.stop_minutes:g} min per stop, {args.leg_minutes:g} per leg, road factor {args.road_factor:g}, "
+          f"{args.stop_minutes:g} min per stop, {args.leg_minutes:g} per leg, {describe_roads(planner, args.road_factor)}, "
           f"front-load {args.front_load:g}" + (", quick (beam search)" if args.quick else ""))
     print(f"{describe_gas(args)}, {describe_slow_zones(slow_zones)}, {describe_first(planner)}")
     print(f"{describe_hours(planner)}")

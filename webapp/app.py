@@ -52,6 +52,8 @@ DATA_DIR = os.environ.get('DATA_DIR') or os.path.join(os.path.dirname(os.path.ab
 RESULTS_DIR = os.environ.get('RESULTS_DIR') or os.path.join(DATA_DIR, 'web-scenarios')
 BONUS_CSV = os.path.join(DATA_DIR, 'bonus-lat-lon-points.csv')
 COMBOS_CSV = os.path.join(DATA_DIR, 'bonus-combos.csv')
+# Road miles between bonuses, from buildRoadMiles.py, for the Road miles switch
+ROAD_MILES_CSV = os.path.join(DATA_DIR, planRoute.ROAD_MILES_CSV)
 # Archived runs, a folder for each time the list was archived, named for when
 ARCHIVE_DIR = os.path.join(RESULTS_DIR, 'archives')
 WORKERS = int(os.environ.get('PLANNER_WORKERS') or os.cpu_count())
@@ -107,6 +109,9 @@ SWITCHES = [
      'visit them first, in the order typed; the planner adds the rest of the day after them'),
     ('only', 'Only the must-visit bonuses', False,
      'route just those, adding nothing else; in the quickest order unless In this order is on'),
+    ('road_miles', 'Road miles', False,
+     'real road miles between bonuses (from a GraphHopper table, buildRoadMiles.py) instead of straight-line '
+     'miles x the road factor; matched Google\'s leg times better at the same speed and leg minutes'),
     ('quick', 'Quick mode', False, 'beam search: about 4x faster and as good on the 2026 bonuses, but it may '
                                    'miss a better route; no front-load'),
 ]
@@ -247,11 +252,12 @@ def all_runs():
     return sorted(runs, key=lambda run: run['created'], reverse=True)
 
 
-def data_fingerprint():
-    """Changes whenever the bonus or combo file does, so old results aren't
-    reused for new data."""
+def data_fingerprint(settings):
+    """Changes whenever the bonus or combo file does (or the road miles
+    table, for a run that uses it), so old results aren't reused for new
+    data."""
     digest = hashlib.sha256()
-    for path in (BONUS_CSV, COMBOS_CSV):
+    for path in (BONUS_CSV, COMBOS_CSV) + ((ROAD_MILES_CSV,) if settings.get('road_miles') else ()):
         if os.path.exists(path):
             with open(path, 'rb') as f:
                 digest.update(f.read())
@@ -290,6 +296,11 @@ def read_form(form):
     if not settings['in_order']:
         # Off is left out, so runs from before the switch keep their IDs
         del settings['in_order']
+    if settings['road_miles'] and not os.path.exists(ROAD_MILES_CSV):
+        raise ValueError("Road miles: there's no road miles table on the server yet")
+    if not settings['road_miles']:
+        # Off is left out, so runs from before the switch keep their IDs
+        del settings['road_miles']
     if settings['only'] and not settings['must']:
         raise ValueError("Only the must-visit bonuses: list the bonuses in Must visit")
     if settings['quick'] and settings['front_load']:
@@ -308,7 +319,8 @@ def describe(settings):
     hours = (f"best budget for {deadline:g} h" if settings.get('best_budget')
              else f"{settings['hours']:g} h" + (f" of {deadline:g}" if deadline > settings['hours'] else ''))
     parts = [hours,
-             f"{settings['speed']:g} MPH", f"{settings['stop_minutes']:g} min stops", f"road ×{settings['road_factor']:g}"]
+             f"{settings['speed']:g} MPH", f"{settings['stop_minutes']:g} min stops",
+             'road miles' if settings.get('road_miles') else f"road ×{settings['road_factor']:g}"]
     # Runs from before these settings had neither
     if settings.get('leg_minutes'):
         parts.append(f"{settings['leg_minutes']:g} min legs")
@@ -381,7 +393,9 @@ def make_planner(settings, args):
                                 window_margin=settings.get('window_margin', 0) if settings['use_hours'] else 0,
                                 deadline=settings.get('deadline', settings['hours']),
                                 late_penalty=planRoute.parse_late_penalty(
-                                    settings.get('late_penalty', DEFAULTS['late_penalty'])))
+                                    settings.get('late_penalty', DEFAULTS['late_penalty'])),
+                                road_miles=planRoute.load_road_miles(ROAD_MILES_CSV)
+                                if settings.get('road_miles') else None)
     planRoute.apply_first(planner, args)
     planRoute.apply_combos(planner, args)
     return planner, bonuses, slow_zones
@@ -582,7 +596,7 @@ def start_run():
                                error=str(error), has_data=os.path.exists(BONUS_CSV)), 400
     if not os.path.exists(BONUS_CSV):
         abort(503, "No bonus data on the server yet")
-    key = json.dumps(settings, sort_keys=True) + data_fingerprint()
+    key = json.dumps(settings, sort_keys=True) + data_fingerprint(settings)
     run_id = hashlib.sha256(key.encode()).hexdigest()[:12]
     path = result_path(run_id)
     if os.path.exists(path):
@@ -784,7 +798,7 @@ def make_fitted_run(run_id, check_id):
         abort(404)
     settings = source['settings'] | dict(must=','.join(check['fit']['codes']), only=True, quick=False)
     settings.pop('first', None)
-    key = json.dumps(settings, sort_keys=True) + data_fingerprint() + 'fit'
+    key = json.dumps(settings, sort_keys=True) + data_fingerprint(settings) + 'fit'
     new_id = hashlib.sha256(key.encode()).hexdigest()[:12]
     if not os.path.exists(result_path(new_id)):
         args = planner_args(settings)

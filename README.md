@@ -1,8 +1,8 @@
 # SNAFU rally route planner
 
 Finds a high-scoring route through the SNAFU rally bonus locations from
-straight-line distances, then checks it on real roads with the Google Maps
-Routes API.
+straight-line distances (or, optionally, road miles from a local GraphHopper
+server), then checks it on real roads with the Google Maps Routes API.
 
 ## Setup
 
@@ -111,6 +111,15 @@ book) live in their own folder, e.g. `SNAFU_2026/`.
 
     ```bash
     python planRoute.py
+    ```
+
+    Optional: with a GraphHopper server running locally, build a table of
+    real road miles between the bonuses once, and plan with it (see
+    [Road miles from GraphHopper](#road-miles-from-graphhopper)):
+
+    ```bash
+    python buildRoadMiles.py
+    python planRoute.py --road-miles bonus-road-miles.csv
     ```
 
 3. ### Check the route on real roads with Google Maps
@@ -330,6 +339,7 @@ PyPy.
 | `--stop-minutes` | 5 | Time at each bonus to take its picture |
 | `--leg-minutes` | 3 | Time every leg takes on top of driving: leaving the main road, finding the bonus, parking. None between bonuses at the same spot (see below) |
 | `--road-factor` | 1.23 | Multiplies straight-line miles to approximate road miles (Google checks of 2026 routes gave 1.20-1.23) |
+| `--road-miles` | none | Road miles between bonuses from this table (`bonus-road-miles.csv`, made by `buildRoadMiles.py`) instead of straight line × road factor (see [Road miles from GraphHopper](#road-miles-from-graphhopper)) |
 | `--gas-miles` | 175 | Stop for gas each time the route passes another this many miles; 0 for none |
 | `--gas-minutes` | 10 | Time for each gas stop |
 | `--slow-zone` | Atlanta | `LAT,LON,RADIUS_MILES,MPH[,STOP_MINUTES]`: the part of any leg inside this circle goes at MPH, and each bonus inside it takes STOP_MINUTES more. Repeat for more zones; the default is `33.78,-84.39,15,25,0` |
@@ -375,6 +385,50 @@ slip from costing the bonus.
 
 Numbers quoted elsewhere in this README come from before these two
 settings; add `--leg-minutes 0 --window-margin 0` to plan as they did.
+
+### Road miles from GraphHopper
+
+One road factor for every leg is right on average and wrong on the winding
+ones: OCLG to JMBM is 22.6 straight-line miles and 32 road miles (×1.43),
+while some legs are ×1.06. `--road-miles` plans with real road miles for
+each pair of places instead, from a table that `buildRoadMiles.py` makes
+with a [GraphHopper](https://www.graphhopper.com/open-source/) server running
+locally on OpenStreetMap data, e.g. route-camp's (`http://localhost:8989`,
+profile `car`). It's free: no Google calls.
+
+```bash
+python buildRoadMiles.py                     # writes bonus-road-miles.csv
+python planRoute.py --road-miles bonus-road-miles.csv
+```
+
+`buildRoadMiles.py` asks GraphHopper for the route between every pair of
+places, both ways (about 18,000 for 135 places, about 20 seconds with its 8
+workers; `--graphhopper URL`, `--profile` and `--workers` change that). Rerun
+it whenever the bonus file changes. The table keys each pair by its
+coordinates, so a bonus added or moved since the table was built gets the
+straight-line estimate, with a warning. `planRouteSearch.py` and
+`planRouteExact.py` take `--road-miles` too.
+
+Only the miles come from GraphHopper. Time is still miles ÷ `--speed`, plus
+the slow zones and leg minutes, because that matched Google better than
+GraphHopper's own times, which have no traffic and came out slower than
+Google's. On the 73 different legs in the saved Google checks (Saturday
+traffic forecast), the total error between planned and Google leg times was:
+
+| Model | Total error | Median leg off by |
+| --- | --- | --- |
+| Straight line × 1.23 at 50 MPH, 3 leg minutes, Atlanta zone (defaults) | 265 min | 13% |
+| Same, best fit (51 MPH, × 1.18) | 230 min | 11% |
+| GraphHopper's own times, scaled to fit | 285 min | 13% |
+| GraphHopper road miles at 51 MPH, 3 leg minutes, Atlanta zone | 206 min | 10% |
+
+Road miles also matched Google's road miles closely (77 miles off in total
+against 127 for the road factor). The best speed with them, 51 MPH, is about
+the default, so the default speed and leg minutes stay. What's left is
+mostly slow in-town legs, which the slow zones and leg minutes cover; the
+Athens slow zone mostly fixed winding roads, which road miles now handle, so
+it's probably not needed with them. 73 legs from one forecast is a small
+sample: treat it as a rough fit.
 
 ### Confidence
 
@@ -698,8 +752,9 @@ It can't try every possible route; there are far too many.
 **Rules every route follows**
 
 - Start and finish at Rally HQ, within the time budget.
-- Driving time is straight-line miles × the road factor, at the average
-  speed, and 25 MPH through the Atlanta slow zone.
+- Driving time is straight-line miles × the road factor (or road miles,
+  with the Road miles switch), at the average speed, and 25 MPH through the
+  Atlanta slow zone.
 - Each leg costs the leg minutes (leaving the road, parking) on top of
   driving, and each bonus the stop minutes for its photo, plus a gas stop
   each time the miles pass another "gas every" distance.
@@ -737,9 +792,9 @@ finishes with the same drop-and-rebuild as step 4. It's faster because it
 never reworks whole routes, but it can miss a route behind a stop that
 doesn't look attractive yet. See [Tree search](#tree-search-beam-and-depth-first).
 
-**What none of this knows about:** real roads (hence the road factor, and
-the Google check), weather, rest breaks, or how long a photo really takes;
-those go into the speed, road factor and stop minutes.
+**What none of this knows about:** real roads (hence the road factor, road
+miles and the Google check), traffic, weather, rest breaks, or how long a
+photo really takes; those go into the speed, road factor and stop minutes.
 
 ### How the search works
 
@@ -804,7 +859,8 @@ collects its points sooner; then the one that takes less time.
   example, it never swaps two stops for three different ones in one move.
   `planRouteExact.py` (below) is meant to close that gap.
 - Distances are straight lines at one average speed. Rivers, mountains and
-  missing roads are only covered by `--road-factor`.
+  missing roads are only covered by `--road-factor`, unless `--road-miles`
+  gives real road miles; the speed is still one average either way.
 - Gas stops are counted for every `--gas-miles` driven in total. Where in
   the day they fall, and whether a station is nearby, isn't considered.
 
@@ -1147,7 +1203,9 @@ server; checking a route with Google is an optional extra, off unless you
 turn it on (see below). The exact solver isn't included: it can run for hours.
 
 It reads the files from step 1, `bonus-lat-lon-points.csv` and
-`bonus-combos.csv`. The bonus data comes from the rally book, so keep the
+`bonus-combos.csv`, and, for the Road miles switch, `bonus-road-miles.csv`
+from `buildRoadMiles.py` (the switch says so if it's missing). The web app
+never talks to GraphHopper; it only reads the table. The bonus data comes from the rally book, so keep the
 password to people the rally allows to see it.
 
 ### Running it on a server
@@ -1168,7 +1226,7 @@ the network in the clear.
     ```bash
     git clone https://github.com/scrogatl/rally-route-finder.git
     mkdir -p rally-route-finder/data
-    scp bonus-lat-lon-points.csv bonus-combos.csv SERVER:rally-route-finder/data/
+    scp bonus-lat-lon-points.csv bonus-combos.csv bonus-road-miles.csv SERVER:rally-route-finder/data/
     ```
 
 3. On the server, set the password, then start it:

@@ -305,7 +305,7 @@ def main():
 
     points = planner.route_points(route)
     print(f"{len(bonuses)} bonuses, {args.hours} hours at {args.speed} MPH, "
-          f"{args.stop_minutes:g} min per stop, {args.leg_minutes:g} per leg, road factor {args.road_factor:g}")
+          f"{args.stop_minutes:g} min per stop, {args.leg_minutes:g} per leg, {planRoute.describe_roads(planner, args.road_factor)}")
     print(f"{planRoute.describe_gas(args)}, {planRoute.describe_slow_zones(slow_zones)}, "
           f"{planRoute.describe_first(planner)}")
     print(f"{planRoute.describe_hours(planner)}")
