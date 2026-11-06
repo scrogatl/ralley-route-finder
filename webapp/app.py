@@ -103,6 +103,9 @@ SLOW_ZONES = [
 ]
 SWITCHES = [
     ('skip_timed', 'Leave out bonuses with hours', False, 'plan only the bonuses open all day'),
+    ('avoid_atlanta', 'Avoid Atlanta', False,
+     'leave out every bonus inside I-285 plus about 5 miles, e.g. for roadwork; legs across Atlanta still go at '
+     'its slow-zone speed'),
     ('use_combos', 'Combo bonuses', True, 'add combo points for getting every bonus in one'),
     ('best_budget', 'Find the best time budget', False,
      'plan budgets from the deadline down and keep the one with the highest expected score under the late '
@@ -300,6 +303,9 @@ def read_form(form):
         del settings['in_order']
     if settings['road_miles'] and not os.path.exists(ROAD_MILES_CSV):
         raise ValueError("Road miles: there's no road miles table on the server yet")
+    if not settings['avoid_atlanta']:
+        # Off is left out, so runs from before the switch keep their IDs
+        del settings['avoid_atlanta']
     if not settings['road_miles']:
         # Off is left out, so runs from before the switch keep their IDs
         del settings['road_miles']
@@ -347,6 +353,8 @@ def describe(settings):
               and not (name == 'use_hours' and settings.get('skip_timed'))]
     if settings.get('skip_timed'):
         parts.append('bonuses with hours left out')
+    if settings.get('avoid_atlanta'):
+        parts.append('Atlanta avoided')
     zones = [label for name, label, *_ in SLOW_ZONES if settings.get(name)]
     if zones:
         names = zones[0] if len(zones) == 1 else ', '.join(zones[:-1]) + ' and ' + zones[-1]
@@ -372,13 +380,18 @@ def planner_args(settings):
         first, must = settings.get('first'), settings.get('must')
     return argparse.Namespace(first=first, must=must, only=settings.get('only'),
                               skip_timed=settings.get('skip_timed', False),
+                              avoid_atlanta=settings.get('avoid_atlanta', False),
                               gas_miles=settings['gas_miles'], gas_minutes=settings['gas_minutes'],
                               combos=COMBOS_CSV, ignore_combos=not settings['use_combos'])
 
 
 def run_slow_zones(settings):
     """The slow zones a run's settings picked."""
-    return [zone for name, *_, zone in SLOW_ZONES if settings.get(name)]
+    zones = [zone for name, *_, zone in SLOW_ZONES if settings.get(name)]
+    if settings.get('avoid_atlanta') and planRoute.ATLANTA_SLOW_ZONE not in zones:
+        # Legs that cut across Atlanta are still slow there
+        zones.append(planRoute.ATLANTA_SLOW_ZONE)
+    return zones
 
 
 def make_planner(settings, args):

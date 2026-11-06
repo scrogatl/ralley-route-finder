@@ -204,6 +204,9 @@ def describe_gas(args):
 
 def slow_zones_from_args(args):
     zones = [] if args.no_slow_zone else args.slow_zone or [ATLANTA_SLOW_ZONE]
+    if getattr(args, 'avoid_atlanta', False) and ATLANTA_SLOW_ZONE not in zones:
+        # Legs that cut across Atlanta are still slow there
+        zones = zones + [ATLANTA_SLOW_ZONE]
     return (zones + ([ATHENS_SLOW_ZONE] if args.athens_slow_zone else [])
             + ([SAVANNAH_SLOW_ZONE] if args.savannah_slow_zone else [])
             + ([AUGUSTA_SLOW_ZONE] if args.augusta_slow_zone else []))
@@ -396,16 +399,28 @@ def add_hours_args(parser):
                              f'leg on the day doesn\'t miss it (default {WINDOW_MARGIN})')
     parser.add_argument('--ignore-hours', action='store_true',
                         help="plan as if every bonus is open all day, ignoring the rally book's hours")
+    parser.add_argument('--avoid-atlanta', action='store_true',
+                        help='leave out every bonus inside the Atlanta slow zone (I-285 plus about 5 miles), e.g. '
+                             'for roadwork; the zone stays on, so a leg across Atlanta is still slow')
     parser.add_argument('--skip-timed', action='store_true',
                         help='leave out every bonus with opening hours, planning only the ones open all day')
 
 
+def in_atlanta(place):
+    """Inside the Atlanta slow zone's circle (I-285 plus about 5 miles)."""
+    return haversine_miles(ATLANTA_SLOW_ZONE, place) <= ATLANTA_SLOW_ZONE['radius']
+
+
 def planned_bonuses(bonuses, args):
-    """The bonuses, less, with --skip-timed, those with opening hours."""
+    """The bonuses, less, with --skip-timed, those with opening hours, and,
+    with --avoid-atlanta, those inside the Atlanta slow zone."""
     timed = [b['code'] for b in bonuses if args.skip_timed and (b.get('opens') or b.get('closes'))]
     if timed:
         print(f"Leaving out {len(timed)} bonuses with hours: {', '.join(timed)}", file=sys.stderr)
-    return [b for b in bonuses if b['code'] not in timed]
+    atlanta = [b['code'] for b in bonuses if getattr(args, 'avoid_atlanta', False) and in_atlanta(b)]
+    if atlanta:
+        print(f"Leaving out {len(atlanta)} bonuses in Atlanta: {', '.join(atlanta)}", file=sys.stderr)
+    return [b for b in bonuses if b['code'] not in timed and b['code'] not in atlanta]
 
 
 def describe_hours(planner):

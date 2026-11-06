@@ -358,6 +358,7 @@ PyPy.
 | `--window-margin` | 10 | Reach a bonus with hours at least this many minutes before it closes |
 | `--ignore-hours` | | Plan as if every bonus is open all day |
 | `--skip-timed` | | Leave out every bonus with opening hours |
+| `--avoid-atlanta` | | Leave out every bonus inside the Atlanta slow zone, and keep the zone on (see [Avoiding Atlanta](#avoiding-atlanta)) |
 | `--combos` | bonus-combos.csv | Combo bonuses from the rally book, used if the file exists |
 | `--ignore-combos` | | Plan without the combo bonuses |
 | `--workers` | all cores | How many CPU cores to search with |
@@ -666,6 +667,17 @@ road miles per straight-line mile), which no circle can fix. It leans
 slightly cautious: over those legs it plans 25 minutes more than Google in
 total. That comes from 8 Athens legs on one Saturday morning's forecast, so
 treat it as a rough correction.
+
+### Avoiding Atlanta
+
+`--avoid-atlanta` (the web app's Avoid Atlanta switch) is for a day when
+Atlanta traffic will be bad, e.g. roadwork closing part of I-285. It leaves
+out every bonus inside the Atlanta slow zone's circle (I-285 plus about 5
+miles; 9 bonuses in 2026: GITM, GTTT, PARK, EMUM, WWRD, JMSA, MUAB, TOBY,
+MECH) and keeps the Atlanta slow zone on even with `--no-slow-zone`, so a leg
+that cuts across Atlanta is still timed at 25 MPH there. Bonuses just
+outside the circle (KSUC, HRAM, ROSE, 20-26 miles out) stay in. A
+must-visit bonus inside the circle is an unknown code.
 
 ### Front-loading points
 
