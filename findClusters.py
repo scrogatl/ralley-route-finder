@@ -67,7 +67,8 @@ def main():
     parser.add_argument('--speed', type=float, default=planRoute.DEFAULT_SPEED,
                         help=f'average speed in MPH (default {planRoute.DEFAULT_SPEED:g})')
     parser.add_argument('--stop-minutes', type=float, default=5,
-                        help='time spent at each bonus taking its picture (default 5)')
+                        help='minutes stopped at each bonus: parking, finding the sign, the photo and getting going again '
+                             '(default 5)')
     parser.add_argument('--road-factor', type=float, default=planRoute.DEFAULT_ROAD_FACTOR,
                         help='multiply straight-line miles by this to approximate road miles '
                              f'(default {planRoute.DEFAULT_ROAD_FACTOR:g})')

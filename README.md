@@ -240,8 +240,9 @@ it can take a few minutes; it uses all CPU cores and shows its progress
 while it runs.
 
 It estimates distances as straight-line miles between bonuses, and time as
-distance ÷ average speed, plus 3 minutes a leg for leaving the main road and
-parking, a stop at each bonus to take its picture and a gas stop every 175
+distance ÷ average speed, plus 3 minutes of driving a leg for getting off the
+main road to the bonus, a stop at each bonus to park and take its picture,
+and a gas stop every 175
 miles. Driving through Atlanta (inside I-285 plus about 5 miles) is slowed
 to 25 MPH. The
 route starts and ends at Rally HQ and fits in the time budget. It prints each
@@ -336,8 +337,8 @@ PyPy.
 | `--late-penalty` | `15:25,30:50` | The penalty for being back late, for the expected score: up to MINUTES late, PERCENT off; later than the last is a DNF |
 | `--best-budget` | off | Try budgets from the deadline down and keep the one with the highest expected score (see [Confidence](#confidence)) |
 | `--speed` | 50 | Average speed in MPH |
-| `--stop-minutes` | 5 | Time at each bonus to take its picture |
-| `--leg-minutes` | 3 | Time every leg takes on top of driving: leaving the main road, finding the bonus, parking. None between bonuses at the same spot (see below) |
+| `--stop-minutes` | 5 | Time stopped at each bonus: parking, finding the sign, the photo, getting going again |
+| `--leg-minutes` | 3 | Driving time every leg takes on top of miles ÷ speed: off the main road and through local streets to the bonus. None between bonuses at the same spot (see below) |
 | `--road-factor` | 1.23 | Multiplies straight-line miles to approximate road miles (Google checks of 2026 routes gave 1.20-1.23) |
 | `--road-miles` | none | Road miles between bonuses from this table (`bonus-road-miles.csv`, made by `buildRoadMiles.py`) instead of straight line × road factor (see [Road miles from GraphHopper](#road-miles-from-graphhopper)) |
 | `--gas-miles` | 175 | Stop for gas each time the route passes another this many miles; 0 for none |
@@ -368,8 +369,8 @@ Driving time alone undercounts short hops. On the 174 legs in the saved
 Google checks, the 60 legs under 5 straight-line miles took Google 342
 minutes, and the planner, at the speed that best matched the rest, planned
 168 of them: 0.2 miles is 5 minutes on real roads, not 0. Every leg has a
-fixed part (off the main road, find the bonus, park, back out), so a dense
-cluster of cheap bonuses looks almost free to the planner and isn't.
+fixed part (off the main road, through the local streets, into the lot), so
+a dense cluster of cheap bonuses looks almost free to the planner and isn't.
 
 `--leg-minutes` adds that fixed part to every leg (except between bonuses at
 the same spot, under 0.05 miles apart). Fitted to those legs with the slow
@@ -377,6 +378,14 @@ zones on and road factor 1.23, 3 minutes a leg and 54 MPH matched best and
 made the short legs right (336 minutes planned against Google's 342). With
 it, the planner sees what each extra stop costs and drops low-value stops
 to reach the big ones.
+
+Leg minutes are driving, and stop minutes aren't, so they stay two settings.
+Google's leg times include the slow last mile that leg minutes stand for,
+but not parking or the photo, so `checkRoute.py` adds only the stop minutes
+to Google's times. They also fall differently: bonuses at the same spot
+share one leg but each takes a stop, and the last leg back to Rally HQ takes
+leg minutes but no stop. Anything done stopped (parking, finding the sign,
+the photo, getting going) belongs in `--stop-minutes`.
 
 `--window-margin` plans to reach a bonus with hours at least that many
 minutes before it closes. A route planned to reach BISH one minute before it
@@ -755,8 +764,8 @@ It can't try every possible route; there are far too many.
 - Driving time is straight-line miles × the road factor (or road miles,
   with the Road miles switch), at the average speed, and 25 MPH through the
   Atlanta slow zone.
-- Each leg costs the leg minutes (leaving the road, parking) on top of
-  driving, and each bonus the stop minutes for its photo, plus a gas stop
+- Each leg costs the leg minutes (off the main road to the bonus) on top of
+  miles ÷ speed, and each bonus the stop minutes (park, photo, go), plus a gas stop
   each time the miles pass another "gas every" distance.
 - A bonus reached before it opens is waited for; one that would be reached
   after it closes, or within the bonus-hours margin of closing, can't be in
@@ -793,8 +802,11 @@ never reworks whole routes, but it can miss a route behind a stop that
 doesn't look attractive yet. See [Tree search](#tree-search-beam-and-depth-first).
 
 **What none of this knows about:** real roads (hence the road factor, road
-miles and the Google check), traffic, weather, rest breaks, or how long a
-photo really takes; those go into the speed, road factor and stop minutes.
+miles and the Google check), traffic beyond the slow zones, weather, rest
+breaks and meals, or how long a stop really takes. The speed, leg minutes
+and slow zones are fitted to Google's driving times, so they cover driving
+only; leave room for breaks with a time budget under the deadline, and for
+slow stops with more stop minutes.
 
 ### How the search works
 
@@ -960,7 +972,7 @@ for current numbers.
 | --- | --- | --- |
 | `--depart` | none | When you leave Rally HQ; turns on the traffic forecast |
 | `--hours` | 10 | Time budget, Rally HQ to Rally HQ |
-| `--stop-minutes` | 5 | Time at each bonus to take its picture |
+| `--stop-minutes` | 5 | Time stopped at each bonus: parking, finding the sign, the photo, getting going again |
 | `--gas-miles` | 175 | Stop for gas each time the route passes another this many miles; 0 for none |
 | `--gas-minutes` | 10 | Time for each gas stop |
 | `--bonuses` | bonus-lat-lon-points.csv | Bonus file with the hours bonuses are open |

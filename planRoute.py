@@ -8,9 +8,9 @@ are rough: real roads are longer. --road-factor pads them (1.23 fits Google's
 road miles on average); --road-miles uses real road miles instead, from a
 table buildRoadMiles.py makes with a local GraphHopper server. The route starts and ends at Rally HQ and must fit
 in the time budget, including 5 minutes (--stop-minutes) at each bonus to
-take its picture, 3 minutes on every leg for getting off the main road and
-parking (--leg-minutes), a 10-minute gas stop every 175 miles (--gas-miles,
---gas-minutes), and slower driving through Atlanta (--slow-zone). If the
+park and take its picture, 3 minutes of driving on every leg for getting off
+the main road to the bonus (--leg-minutes), a 10-minute gas stop every 175
+miles (--gas-miles, --gas-minutes), and slower driving through Atlanta (--slow-zone). If the
 CSV has the hours bonuses are open (from the rally book, see
 extractDatafromGPX.py), a bonus only counts while it's open, waiting there
 if you arrive early, and reached at least 10 minutes before it closes
@@ -74,8 +74,11 @@ DEFAULT_ROAD_FACTOR = 1.23
 # The rally book's start time; bonus hours are counted from it
 RALLY_START = '07:00'
 
-# Minutes every leg takes on top of driving, for leaving the main road,
-# finding the bonus and parking (--leg-minutes). Fitted to 174 legs of 2026
+# Driving minutes every leg takes on top of miles / speed: off the main road
+# and through the local streets to the bonus, which a per-mile speed misses
+# (--leg-minutes). It's driving, part of Google's leg times, so checkRoute.py
+# doesn't add it to them; parking and the photo are --stop-minutes, which
+# Google's times don't include. Fitted to 174 legs of 2026
 # Google checks: with it, legs under 5 miles take Google's time (336 min vs
 # 342) where without it they took half; the best speed then is about 54 MPH
 # at road factor 1.23
@@ -307,8 +310,9 @@ def start_time(text):
 
 def add_leg_args(parser):
     parser.add_argument('--leg-minutes', type=float, default=LEG_MINUTES,
-                        help='minutes every leg takes on top of driving, for leaving the main road, finding the '
-                             f'bonus and parking; not between bonuses at the same spot (default {LEG_MINUTES})')
+                        help='driving minutes every leg takes on top of miles / speed: off the main road and '
+                             'through the local streets to the bonus (parking and the photo are --stop-minutes); '
+                             f'not between bonuses at the same spot (default {LEG_MINUTES})')
     parser.add_argument('--road-miles', metavar='FILE',
                         help='road miles between bonuses from this table (made by buildRoadMiles.py, e.g. '
                              f'{ROAD_MILES_CSV}) instead of straight-line miles x --road-factor; a pair not in it, '
@@ -1394,7 +1398,8 @@ def main():
     parser.add_argument('--speed', type=float, default=DEFAULT_SPEED,
                         help=f'average speed in MPH (default {DEFAULT_SPEED:g})')
     parser.add_argument('--stop-minutes', type=float, default=5,
-                        help='time spent at each bonus taking its picture (default 5)')
+                        help='minutes stopped at each bonus: parking, finding the sign, the photo and getting going again '
+                             '(default 5)')
     parser.add_argument('--road-factor', type=float, default=DEFAULT_ROAD_FACTOR,
                         help='multiply straight-line miles by this to approximate road miles '
                              f'(default {DEFAULT_ROAD_FACTOR:g})')

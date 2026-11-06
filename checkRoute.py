@@ -457,7 +457,8 @@ def main():
     parser.add_argument('--hours', type=float, default=planRoute.DEFAULT_HOURS,
                         help=f'time budget in hours (default {planRoute.DEFAULT_HOURS:g})')
     parser.add_argument('--stop-minutes', type=float, default=5,
-                        help='time spent at each bonus taking its picture (default 5)')
+                        help='minutes stopped at each bonus: parking, finding the sign, the photo and getting going again '
+                             '(default 5)')
     parser.add_argument('--depart', type=datetime.fromisoformat,
                         help='when you leave Rally HQ, e.g. "2026-11-07 07:00" (your computer\'s time zone '
                              'unless you add one, e.g. "2026-11-07 07:00-05:00"); uses Google\'s traffic forecast. '

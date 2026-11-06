@@ -77,9 +77,11 @@ NUMBERS = [
      'when you must be back at HQ, after the start; confidence is measured against it'),
     ('speed', 'Average speed, MPH', planRoute.DEFAULT_SPEED, 20, 80,
      'with minutes per leg, Google checks of 2026 routes fit 50-54'),
-    ('stop_minutes', 'Minutes at each bonus', 5, 0, 30, 'to take its picture'),
+    ('stop_minutes', 'Minutes at each bonus', 5, 0, 30,
+     'stopped: parking, finding the sign, the photo, getting going again'),
     ('leg_minutes', 'Minutes per leg', planRoute.LEG_MINUTES, 0, 15,
-     'leaving the main road, finding the bonus and parking; Google checks fit 3 (with about 54 MPH at road x1.23)'),
+     'driving off the main road and through local streets to the bonus, which the average speed misses; '
+     'Google checks fit 3 (with about 54 MPH at road x1.23)'),
     ('window_margin', 'Bonus hours margin, minutes', planRoute.WINDOW_MARGIN, 0, 60,
      'reach a bonus with hours this long before it closes'),
     ('road_factor', 'Road factor', planRoute.DEFAULT_ROAD_FACTOR, 1.0, 2.0, 'road miles ÷ straight-line miles; Google checks gave 1.20-1.23'),
