@@ -35,7 +35,7 @@
         <div class="field">
           <label class="field" for="must">
             <span>Must visit</span>
-            <input id="must" name="must" value="{{ settings['must'] }}" placeholder="e.g. CGSH,SMCH">
+            <input id="must" name="must" value="{{ settings['must'] }}" placeholder="e.g. CGSH SMCH or CGSH,SMCH">
             <small>bonus codes to include, in whatever order fits best unless In this order is on</small>
           </label>
           {% for name, label, on, help in switches if name in ('in_order', 'only') %}

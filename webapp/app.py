@@ -293,7 +293,7 @@ def read_form(form):
     except argparse.ArgumentTypeError:
         raise ValueError("Late penalty: enter minutes:percent pairs, e.g. 15:25,30:50")
     settings['late_penalty'] = ','.join(f'{m:g}:{p:g}' for m, p in tiers)
-    settings['must'] = ','.join(code.strip().upper() for code in form.get('must', '').split(',') if code.strip())
+    settings['must'] = ','.join(code.upper() for code in re.split(r'[\s,]+', form.get('must', '')) if code)
     if settings['hours'] > settings['deadline'] and not settings['best_budget']:
         raise ValueError("Time budget: must be no more than the deadline")
     if settings['in_order'] and not settings['must']:

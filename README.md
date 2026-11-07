@@ -717,7 +717,8 @@ way and still reaches those two by hour 4.
 
 `--must` is the same idea without fixing the order: the route has to visit
 the bonuses you name, and the search decides when, around everything else.
-The web app's "Must visit" box does this. Its "In this order" switch makes
+The web app's "Must visit" box does this; separate the codes with commas,
+spaces or both. Its "In this order" switch makes
 them `--first` stops instead, visited in the order typed; with "Only the
 must-visit bonuses" too, that's exactly the route you typed, e.g. one pasted
 from a scenario's **Bonus list**.
